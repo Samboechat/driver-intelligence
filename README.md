@@ -1,0 +1,75 @@
+# Driver Intelligence
+
+Assistente financeiro para motoristas de aplicativo (Android). Lê a oferta de corrida exibida no Uber Driver, calcula a rentabilidade e mostra o resultado numa **janela flutuante** — em cerca de dois segundos após o reconhecimento. A decisão de aceitar é sempre do motorista: o app **nunca toca na tela**.
+
+```
+Captura (MediaProjection) → máscara do overlay → OCR local (ML Kit) → extração → validação
+   → motor financeiro → classificação → máquina de estados → overlay → registro (oferta analisada)
+```
+
+## O que está implementado
+
+| Área | Situação |
+|---|---|
+| Motor financeiro (R$/km, R$/h, combustível, custo operacional, lucro, margem, eficiência, retorno vazio, regra anti-duplicidade de combustível) | Implementado e testado (20 testes) |
+| Classificação VERDE/AMARELO/VERMELHO/CINZA com pesos ajustáveis e justificativa | Implementado e testado (13 testes) |
+| Parser de OCR (R$, km, m, mi, min, h, quebras de linha, confusões O→0, dinâmico, ordem invertida, geometria) | Implementado e testado (16 + 6 testes) |
+| Validação, confiança e impressão digital da oferta | Implementado e testado (10 testes) |
+| Máquina de estados da oferta (detecção, confirmação, mudança, dispensa, deduplicação) | Implementado e testado (12 testes) |
+| Estatísticas (dia, semana, mês, horário, dia da semana, metas, amostra mínima) | Implementado e testado (9 testes) |
+| Captura de tela (MediaProjection + serviço em primeiro plano, regras do Android 14+) | Implementado — requer teste em aparelho |
+| OCR com ML Kit (modelo embarcado, 100% local) | Implementado — teste instrumentado sintético incluso |
+| Overlay flutuante (arrastar, minimizar, expandir, pausar, fechar, transparência, posição salva, máscara no OCR) | Implementado — requer teste em aparelho |
+| Dashboard, histórico (busca, filtros, ordenação, edição, exclusão, CSV), estatísticas, veículos, metas, critérios, permissões, laboratório de OCR | Implementado |
+| Banco Room + DataStore | Implementado — testes Robolectric inclusos (8) |
+
+## Limitações reais (leia antes de usar)
+
+1. **Compilação**: este código foi escrito num ambiente sem acesso ao Google Maven/SDK Android. O núcleo em Kotlin puro (motor financeiro, parser, estados, estatísticas) foi **compilado e testado de verdade** (96 testes). A camada Android foi revisada, mas **ainda não foi compilada**: o primeiro build (GitHub Actions ou Android Studio) pode apontar erros pontuais a corrigir. Ver [docs/RELATORIO_DE_TESTES.md](docs/RELATORIO_DE_TESTES.md).
+2. **Tela protegida**: se o Uber Driver marcar a tela de oferta como protegida (`FLAG_SECURE`), o Android entrega a captura preta. O app detecta isso, avisa no overlay e oferece inserção manual. Não há como contornar sem violar as regras do sistema — e não tentamos.
+3. **Layout da Uber**: o parser procura padrões (valor, "4 min (1,2 km)", "Viagem", "de distância"), não posições fixas, mas mudanças grandes de layout podem exigir ajuste. Use o **Laboratório de OCR** com prints reais para validar.
+4. **Consentimento a cada início**: o Android 14+ exige autorizar a captura toda vez que o assistente é iniciado. É regra do sistema.
+5. **Toques sobre o overlay**: a janela só ocupa a área do cartão e não bloqueia o resto da tela. Se algum botão do Uber ficar embaixo dela, arraste ou minimize.
+
+## Como gerar o APK
+
+**Opção A — GitHub (sem instalar nada):** suba o projeto para um repositório. O workflow `.github/workflows/android.yml` roda os testes e publica os APKs em *Actions → execução → Artifacts → driver-intelligence-apks*.
+
+**Opção B — Android Studio:** abra a pasta, aguarde o Gradle sincronizar e use *Build → Build APK(s)*. Ou no terminal:
+
+```bash
+./gradlew testDebugUnitTest     # testes unitários
+./gradlew assembleDebug         # app/build/outputs/apk/debug/app-debug.apk
+```
+
+Detalhes em [docs/INSTALACAO.md](docs/INSTALACAO.md).
+
+## Estrutura
+
+```
+app/src/main/java/com/driverintelligence/
+├── domain/            Kotlin puro (sem Android) — testável na JVM
+│   ├── model/         ofertas, custos, metas, veículos, registros
+│   ├── financial/     FinancialEngine, DecisionEngine
+│   ├── recognition/   NumberNormalizer, OfferTextParser, OfferValidator, OfferAnalyzer
+│   ├── detection/     OfferStateMachine
+│   ├── analytics/     AnalyticsEngine
+│   ├── overlay/       regras puras da janela (modos, geometria)
+│   └── util/          formatação pt-BR, CSV
+├── data/              Room (entidades, DAOs, mapeadores), DataStore, repositórios
+├── capture/           CaptureService, ScreenCaptureEngine, consentimento, notificação
+├── recognition/       ML Kit OCR, pré-processamento de imagem
+├── overlay/           janela flutuante (WindowManager + Compose)
+├── designsystem/      tema, componentes, gráficos em Canvas
+├── features/          telas: início, histórico, estatísticas, veículos, ajustes, permissões, manual, laboratório OCR
+├── permissions/       verificação e atalhos de permissões
+└── di/                Hilt
+```
+
+## Documentação
+
+- [Arquitetura e decisões técnicas](docs/ARQUITETURA.md)
+- [Guia de permissões](docs/PERMISSOES.md)
+- [Instalação e compilação](docs/INSTALACAO.md)
+- [Privacidade e dados armazenados](docs/PRIVACIDADE.md)
+- [Relatório de testes](docs/RELATORIO_DE_TESTES.md)
