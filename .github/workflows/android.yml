@@ -20,6 +20,8 @@ jobs:
     name: Testes + APK
     runs-on: ubuntu-latest
     timeout-minutes: 40
+    permissions:
+      contents: write
     env:
       HAS_KEYSTORE: ${{ secrets.DI_KEYSTORE_BASE64 != '' }}
     steps:
@@ -75,6 +77,17 @@ jobs:
             app/build/outputs/apk/debug/*.apk
             app/build/outputs/apk/release/*.apk
             app/build/outputs/bundle/release/*.aab
+
+      - name: Página de download (Releases)
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp app/build/outputs/apk/debug/app-debug.apk DriverIntelligence.apk
+          gh release delete ultima-versao --yes --cleanup-tag || true
+          gh release create ultima-versao DriverIntelligence.apk \
+            --title "Driver Intelligence — última versão" \
+            --notes "Baixe o DriverIntelligence.apk abaixo e instale no celular. Gerado automaticamente a partir do commit ${GITHUB_SHA::7}."
 
       - name: Publicar relatórios de teste
         if: always()
