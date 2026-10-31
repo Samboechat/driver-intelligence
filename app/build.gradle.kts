@@ -23,6 +23,11 @@ android {
         versionName = "0.1.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables { useSupportLibrary = true }
+        // Celulares reais são ARM: incluir só essas arquiteturas reduz o APK em ~2/3.
+        // Para emulador x86 (testes instrumentados), compile com -PallAbis.
+        if (!project.hasProperty("allAbis")) {
+            ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a") }
+        }
     }
 
     signingConfigs {
