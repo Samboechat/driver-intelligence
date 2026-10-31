@@ -10,6 +10,7 @@ import com.driverintelligence.domain.model.AppSettings
 import com.driverintelligence.domain.model.CapturePrefs
 import com.driverintelligence.domain.model.EmptyReturnScenario
 import com.driverintelligence.domain.model.Goals
+import com.driverintelligence.domain.model.IntelligencePrefs
 import com.driverintelligence.domain.model.OverlayPrefs
 import com.driverintelligence.domain.model.ScoringConfig
 import com.driverintelligence.domain.model.ThemeMode
@@ -48,6 +49,7 @@ class SettingsViewModel @Inject constructor(
     fun updateOverlay(t: (OverlayPrefs) -> OverlayPrefs) = viewModelScope.launch { repo.updateOverlay(t) }
     fun updateCapture(t: (CapturePrefs) -> CapturePrefs) = viewModelScope.launch { repo.updateCapture(t) }
     fun setTheme(mode: ThemeMode) = viewModelScope.launch { repo.setTheme(mode) }
+    fun updateIntelligence(t: (IntelligencePrefs) -> IntelligencePrefs) = viewModelScope.launch { repo.updateIntelligence(t) }
 
     fun purgeOffers(days: Int) = viewModelScope.launch {
         val n = offers.purgeOlderThan(days)

@@ -2,7 +2,10 @@ package com.driverintelligence.capture
 
 import android.content.Context
 import android.content.Intent
+import com.driverintelligence.domain.detection.OfferOutcome
 import com.driverintelligence.domain.detection.OfferPhase
+import com.driverintelligence.domain.detection.TripPhase
+import com.driverintelligence.domain.recognition.ScreenKind
 import com.driverintelligence.domain.recognition.OfferAnalysis
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -31,6 +34,10 @@ data class AssistantState(
     val lastOcrMs: Long? = null,
     val avgOcrMs: Double? = null,
     val message: String? = null,
+    /** Última tela identificada do app de corrida. */
+    val screen: ScreenKind = ScreenKind.UNKNOWN,
+    val tripPhase: TripPhase = TripPhase.NONE,
+    val lastOutcome: OfferOutcome? = null,
 )
 
 @Singleton

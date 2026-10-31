@@ -12,6 +12,8 @@ import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.ViewCompositionStrategy
 import com.driverintelligence.capture.ScreenCaptureEngine
 import com.driverintelligence.designsystem.DriverIntelligenceTheme
+import com.driverintelligence.domain.detection.TripPhase
+import com.driverintelligence.domain.detection.TripTimeline
 import com.driverintelligence.domain.model.OverlayPrefs
 import com.driverintelligence.domain.model.ThemeMode
 import com.driverintelligence.domain.overlay.OverlayAction
@@ -23,7 +25,33 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 
-enum class OverlayKind { WAITING, READING, OFFER, PAUSED, CAPTURE_STOPPED, BLOCKED, ERROR }
+enum class OverlayKind { WAITING, READING, OFFER, TRIP, SUMMARY, PAUSED, CAPTURE_STOPPED, BLOCKED, ERROR }
+
+/** Corrida aceita em andamento (o cartão atualiza a cada segundo). */
+data class LiveTrip(
+    val phase: TripPhase,
+    val timeline: TripTimeline,
+    /** Previsão de busca e viagem em minutos (tempo realista quando disponível). */
+    val predictedPickupMin: Double?,
+    val predictedTripMin: Double?,
+    /** Tempo exibido pelo app na oferta. */
+    val offeredPickupMin: Double?,
+    val offeredTripMin: Double?,
+    val fare: Double?,
+    val estimatedCost: Double?,
+    val goalPerHour: Double,
+)
+
+/** Resumo exibido ao fim de uma corrida acompanhada. */
+data class TripSummary(
+    val timeline: TripTimeline,
+    val predictedTotalMin: Double?,
+    val offeredTotalMin: Double?,
+    val revenuePerHour: Double?,
+    val profit: Double?,
+    val registered: Boolean,
+    val cancelled: Boolean = false,
+)
 
 /** Resumo do dia exibido no rodapé do overlay. */
 data class TodayStrip(val revenue: Double, val goal: Double?, val trips: Int, val profit: Double?)
@@ -38,13 +66,20 @@ data class OverlayUiState(
     val message: String? = null,
     /** Incrementado a cada oferta nova — dispara o feedback visual. */
     val pulse: Int = 0,
-    val offerRegistered: Boolean = false,
+    /** O motorista marcou a oferta exibida como aceita. */
+    val offerAccepted: Boolean = false,
+    val trip: LiveTrip? = null,
+    val summary: TripSummary? = null,
 )
 
 interface OverlayCallbacks {
     fun onPauseToggle()
     fun onClose()
-    fun onRegisterTrip()
+    fun onAccept()
+    fun onReject()
+    fun onFinishTrip()
+    fun onCancelTrip()
+    fun onDismissSummary()
     fun onManualInput()
     fun onRestartCapture()
     fun onPrefsChanged(transform: (OverlayPrefs) -> OverlayPrefs)
@@ -142,7 +177,9 @@ class OverlayController(
 
     // ---- Conteúdo ----
 
-    fun showWaiting() = _state.update { it.copy(kind = OverlayKind.WAITING, analysis = null, message = null, offerRegistered = false) }
+    fun showWaiting() = _state.update {
+        it.copy(kind = if (it.trip != null) OverlayKind.TRIP else OverlayKind.WAITING, analysis = null, message = null, offerAccepted = false)
+    }
 
     fun showReading() = _state.update {
         if (it.kind == OverlayKind.OFFER) it else it.copy(kind = OverlayKind.READING, message = null)
@@ -156,7 +193,7 @@ class OverlayController(
                 analysis = analysis,
                 message = null,
                 pulse = if (isNew || changed) it.pulse + 1 else it.pulse,
-                offerRegistered = if (isNew) false else it.offerRegistered,
+                offerAccepted = if (isNew) false else it.offerAccepted,
             )
         }
         if (isNew && haptics) {
@@ -166,7 +203,43 @@ class OverlayController(
         }
     }
 
-    fun clearOffer() = showWaiting()
+    /** A oferta sumiu: volta para a corrida em andamento, o resumo ou a espera. */
+    fun clearOffer() = _state.update {
+        it.copy(
+            analysis = null,
+            message = null,
+            offerAccepted = false,
+            kind = when {
+                it.trip != null -> OverlayKind.TRIP
+                it.summary != null -> OverlayKind.SUMMARY
+                else -> OverlayKind.WAITING
+            },
+        )
+    }
+
+    fun showTrip(trip: LiveTrip) = _state.update {
+        val offerOnScreen = it.kind == OverlayKind.OFFER && it.analysis != null && it.analysis.fingerprint != trip.timeline.offer.fingerprint
+        it.copy(trip = trip, summary = null, kind = if (offerOnScreen) OverlayKind.OFFER else OverlayKind.TRIP)
+    }
+
+    fun endTrip(summary: TripSummary?) = _state.update {
+        val offerOnScreen = it.kind == OverlayKind.OFFER && it.analysis != null && it.analysis.fingerprint != summary?.timeline?.offer?.fingerprint
+        it.copy(
+            trip = null,
+            summary = summary,
+            kind = when {
+                offerOnScreen -> OverlayKind.OFFER
+                summary != null -> OverlayKind.SUMMARY
+                else -> OverlayKind.WAITING
+            },
+        )
+    }
+
+    fun dismissSummary() = _state.update {
+        if (it.kind == OverlayKind.SUMMARY) {
+            it.copy(summary = null, kind = if (it.trip != null) OverlayKind.TRIP else OverlayKind.WAITING)
+        } else it.copy(summary = null)
+    }
 
     fun showPaused(paused: Boolean) = _state.update {
         if (paused) it.copy(kind = OverlayKind.PAUSED, analysis = null, message = null) else it.copy(kind = OverlayKind.WAITING, message = null)
@@ -180,7 +253,7 @@ class OverlayController(
         if (it.kind == OverlayKind.OFFER) it else it.copy(kind = OverlayKind.ERROR, message = message)
     }
 
-    fun markRegistered() = _state.update { it.copy(offerRegistered = true) }
+    fun markAccepted() = _state.update { it.copy(offerAccepted = true) }
 
     fun updateToday(today: TodayStrip?) = _state.update { it.copy(today = today) }
 

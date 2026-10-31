@@ -108,6 +108,39 @@ fun SettingsScreen(
             }
         }
         item {
+            val ip = s.intelligence
+            Group("Inteligência de corrida", "O app aprende com suas corridas quanto os tempos das ofertas atrasam de verdade.") {
+                SwitchRow("Detectar aceite, recusa e acompanhar a corrida", ip.autoTrack) { v -> vm.updateIntelligence { it.copy(autoTrack = v) } }
+                SwitchRow("Registrar sozinho a corrida concluída (com tempos reais)", ip.autoRegister) { v -> vm.updateIntelligence { it.copy(autoRegister = v) } }
+                SwitchRow("Classificar pelo tempo realista", ip.useRealisticTime) { v -> vm.updateIntelligence { it.copy(useRealisticTime = v) } }
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    "Estimativa padrão até ter 5 corridas medidas",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = c.textSecondary,
+                )
+                Text("Busca: +${((ip.defaultPickupFactor - 1) * 100).roundToInt()}%", style = MaterialTheme.typography.bodySmall, color = c.textSecondary)
+                Slider(
+                    value = ip.defaultPickupFactor.toFloat(),
+                    onValueChange = { v -> vm.updateIntelligence { it.copy(defaultPickupFactor = (v * 20).roundToInt() / 20.0) } },
+                    valueRange = 1f..2.5f,
+                    colors = SliderDefaults.colors(thumbColor = c.brand, activeTrackColor = c.brand),
+                )
+                Text("Viagem: +${((ip.defaultTripFactor - 1) * 100).roundToInt()}%", style = MaterialTheme.typography.bodySmall, color = c.textSecondary)
+                Slider(
+                    value = ip.defaultTripFactor.toFloat(),
+                    onValueChange = { v -> vm.updateIntelligence { it.copy(defaultTripFactor = (v * 20).roundToInt() / 20.0) } },
+                    valueRange = 1f..2f,
+                    colors = SliderDefaults.colors(thumbColor = c.brand, activeTrackColor = c.brand),
+                )
+                Text(
+                    "Depois disso, valem os tempos medidos, inclusive por horário (pico pesa diferente).",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = c.textTertiary,
+                )
+            }
+        }
+        item {
             val o = s.overlay
             Group("Janela flutuante") {
                 Text("Modo inicial", style = MaterialTheme.typography.labelMedium, color = c.textSecondary)

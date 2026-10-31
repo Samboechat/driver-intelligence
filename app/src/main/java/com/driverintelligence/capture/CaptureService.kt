@@ -19,6 +19,20 @@ import androidx.lifecycle.lifecycleScope
 import com.driverintelligence.MainActivity
 import com.driverintelligence.data.prefs.SettingsRepository
 import com.driverintelligence.data.repository.AnalysisContextProvider
+import com.driverintelligence.data.repository.IntelligenceRepository
+import com.driverintelligence.domain.detection.OfferOutcome
+import com.driverintelligence.domain.detection.TrackerEffect
+import com.driverintelligence.domain.detection.TrackerEvent
+import com.driverintelligence.domain.detection.TrackerState
+import com.driverintelligence.domain.detection.TripPhase
+import com.driverintelligence.domain.detection.TripTimeline
+import com.driverintelligence.domain.detection.TripTracker
+import com.driverintelligence.domain.recognition.ScreenClassifier
+import com.driverintelligence.overlay.LiveTrip
+import com.driverintelligence.overlay.TripSummary
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import java.util.concurrent.ConcurrentHashMap
 import com.driverintelligence.data.repository.OfferRepository
 import com.driverintelligence.data.repository.SessionRepository
 import com.driverintelligence.data.repository.TripRepository
@@ -75,6 +89,7 @@ class CaptureService : LifecycleService() {
     @Inject lateinit var analyzer: OfferAnalyzer
     @Inject lateinit var controller: AssistantController
     @Inject lateinit var ocrProvider: Provider<OcrEngine>
+    @Inject lateinit var intelligence: IntelligenceRepository
 
     private lateinit var windowCtx: Context
     private var engine: ScreenCaptureEngine? = null
@@ -86,6 +101,12 @@ class CaptureService : LifecycleService() {
     private var todayJob: Job? = null
 
     private val machine = OfferStateMachine()
+    private val tracker = TripTracker()
+    private var tracking = TrackerState()
+    private val trackerMutex = Mutex()
+    /** Impressão digital da oferta → id salvo no banco. */
+    private val offerIds = ConcurrentHashMap<String, Long>()
+    private var summaryJob: Job? = null
     private var detection = DetectionState()
     private val settings = MutableStateFlow(AppSettings())
     private val analysisContext = MutableStateFlow(AnalysisContext())
@@ -287,7 +308,13 @@ class CaptureService : LifecycleService() {
         setPhase(OfferPhase.VALIDATING)
         val result = analyzer.analyzeFrame(text, analysisContext.value)
         setPhase(OfferPhase.CALCULATING)
-        dispatch(DetectionEvent.FrameAnalyzed(result, System.currentTimeMillis()))
+        val now = System.currentTimeMillis()
+        dispatch(DetectionEvent.FrameAnalyzed(result, now))
+        if (settings.value.intelligence.autoTrack) {
+            val kind = ScreenClassifier.classify(text, result.isOfferScreen)
+            controller.update { if (it.screen != kind) it.copy(screen = kind) else it }
+            track(TrackerEvent.Observe(kind, detection.current, now))
+        }
     }
 
     private suspend fun dispatch(event: DetectionEvent) {
@@ -317,6 +344,7 @@ class CaptureService : LifecycleService() {
                 val analysis = effect.analysis
                 lifecycleScope.launch(Dispatchers.IO) {
                     val id = offerRepository.record(analysis, analysisContext.value.vehicleId)
+                    if (id != null) analysis.fingerprint?.let { offerIds[it] = id }
                     if (currentAnalysis?.fingerprint == analysis.fingerprint) currentOfferId = id
                 }
             }
@@ -346,14 +374,27 @@ class CaptureService : LifecycleService() {
 
         override fun onClose() = shutdown()
 
-        override fun onRegisterTrip() {
+        override fun onAccept() {
             val analysis = currentAnalysis ?: return
-            lifecycleScope.launch(Dispatchers.IO) {
-                val offerId = currentOfferId ?: offerRepository.record(analysis, analysisContext.value.vehicleId)
-                val offer = offerId?.let { offerRepository.get(it) } ?: return@launch
-                tripRepository.registerFromOffer(offer)
-                withContext(Dispatchers.Main) { overlay?.markRegistered() }
-            }
+            overlay?.markAccepted()
+            lifecycleScope.launch { track(TrackerEvent.ManualAccept(analysis, System.currentTimeMillis())) }
+        }
+
+        override fun onReject() {
+            lifecycleScope.launch { track(TrackerEvent.ManualReject(System.currentTimeMillis())) }
+        }
+
+        override fun onFinishTrip() {
+            lifecycleScope.launch { track(TrackerEvent.ManualFinish(System.currentTimeMillis())) }
+        }
+
+        override fun onCancelTrip() {
+            lifecycleScope.launch { track(TrackerEvent.ManualCancel(System.currentTimeMillis())) }
+        }
+
+        override fun onDismissSummary() {
+            summaryJob?.cancel()
+            overlay?.dismissSummary()
         }
 
         override fun onManualInput() {
@@ -387,6 +428,8 @@ class CaptureService : LifecycleService() {
             currentAnalysis = null
             currentOfferId = null
             resetPending = true
+            lifecycleScope.launch { track(TrackerEvent.Reset) }
+            overlay?.endTrip(null)
         }
         overlay?.showPaused(value)
         controller.update { it.copy(status = if (value) AssistantStatus.PAUSED else AssistantStatus.RUNNING) }
@@ -427,9 +470,99 @@ class CaptureService : LifecycleService() {
         ocr = null
         preprocessor.release()
         detection = DetectionState()
+        tracking = TrackerState()
+        offerIds.clear()
+        summaryJob?.cancel()
         currentAnalysis = null
         currentOfferId = null
         closeSession()
+    }
+
+    // ---------------- Aceite, recusa e corrida em andamento ----------------
+
+    private suspend fun track(event: TrackerEvent) {
+        val effects = trackerMutex.withLock {
+            val tr = tracker.reduce(tracking, event)
+            tracking = tr.state
+            tr.effects
+        }
+        for (e in effects) handleTracker(e)
+    }
+
+    private suspend fun offerIdFor(a: OfferAnalysis): Long? {
+        val fp = a.fingerprint ?: return null
+        offerIds[fp]?.let { return it }
+        return offerRepository.record(a, analysisContext.value.vehicleId)?.also { offerIds[fp] = it }
+    }
+
+    private suspend fun handleTracker(effect: TrackerEffect) {
+        when (effect) {
+            is TrackerEffect.OutcomeDecided -> {
+                lifecycleScope.launch(Dispatchers.IO) {
+                    offerIdFor(effect.offer)?.let { offerRepository.setOutcome(it, effect.outcome, effect.source, effect.at) }
+                }
+                controller.update { it.copy(lastOutcome = effect.outcome) }
+                if (effect.outcome == OfferOutcome.ACCEPTED && effect.offer.fingerprint == currentAnalysis?.fingerprint) {
+                    withContext(Dispatchers.Main) { overlay?.markAccepted() }
+                }
+            }
+            is TrackerEffect.PhaseChanged -> {
+                controller.update { it.copy(tripPhase = effect.phase) }
+                val tl = effect.timeline ?: return
+                val live = liveTrip(effect.phase, tl)
+                withContext(Dispatchers.Main) { overlay?.showTrip(live) }
+            }
+            is TrackerEffect.TripFinished -> {
+                val tl = effect.timeline
+                val ctx = analysisContext.value
+                val register = settings.value.intelligence.autoRegister
+                val tripId = withContext(Dispatchers.IO) {
+                    intelligence.saveCompletedTrip(tl, offerIdFor(tl.offer), ctx, register)
+                }
+                showSummary(summaryOf(tl, registered = tripId != null, cancelled = false))
+            }
+            is TrackerEffect.TripCancelled -> showSummary(summaryOf(effect.timeline, registered = false, cancelled = true))
+        }
+    }
+
+    private fun liveTrip(phase: TripPhase, tl: TripTimeline): LiveTrip {
+        val a = tl.offer
+        val real = a.realistic?.input
+        return LiveTrip(
+            phase = phase,
+            timeline = tl,
+            predictedPickupMin = real?.pickupTimeMin ?: a.offer.pickupTimeMin,
+            predictedTripMin = real?.tripTimeMin ?: a.offer.tripTimeMin,
+            offeredPickupMin = a.offer.pickupTimeMin,
+            offeredTripMin = a.offer.tripTimeMin,
+            fare = a.offer.fare,
+            estimatedCost = a.financial.totalCost,
+            goalPerHour = analysisContext.value.goals.minRevenuePerHour,
+        )
+    }
+
+    private fun summaryOf(tl: TripTimeline, registered: Boolean, cancelled: Boolean): TripSummary {
+        val live = liveTrip(TripPhase.NONE, tl)
+        val total = tl.totalMin
+        val fare = tl.offer.offer.fare
+        return TripSummary(
+            timeline = tl,
+            predictedTotalMin = if (live.predictedPickupMin != null && live.predictedTripMin != null) live.predictedPickupMin + live.predictedTripMin else null,
+            offeredTotalMin = if (live.offeredPickupMin != null && live.offeredTripMin != null) live.offeredPickupMin + live.offeredTripMin else null,
+            revenuePerHour = if (!cancelled && fare != null && total != null && total >= 1.0) fare / (total / 60.0) else null,
+            profit = if (!cancelled && fare != null) live.estimatedCost?.let { fare - it } else null,
+            registered = registered,
+            cancelled = cancelled,
+        )
+    }
+
+    private suspend fun showSummary(summary: TripSummary) {
+        withContext(Dispatchers.Main) { overlay?.endTrip(summary) }
+        summaryJob?.cancel()
+        summaryJob = lifecycleScope.launch {
+            delay(SUMMARY_MS)
+            overlay?.dismissSummary()
+        }
     }
 
     private fun shutdown() {
@@ -512,5 +645,6 @@ class CaptureService : LifecycleService() {
         private const val MIN_GAP_MS = 60L
         private const val HEARTBEAT_MS = 60_000L
         private const val BLACK_FRAMES_TO_BLOCK = 3
+        private const val SUMMARY_MS = 25_000L
     }
 }

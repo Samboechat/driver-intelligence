@@ -41,6 +41,7 @@ import com.driverintelligence.designsystem.DiTheme
 import com.driverintelligence.designsystem.EmptyState
 import com.driverintelligence.designsystem.InfoRow
 import com.driverintelligence.designsystem.SegmentedSelector
+import com.driverintelligence.domain.detection.OfferOutcome
 import com.driverintelligence.domain.model.AnalyzedOffer
 import com.driverintelligence.domain.model.Classification
 import com.driverintelligence.domain.model.DataSource
@@ -133,6 +134,14 @@ fun HistoryScreen(onEditTrip: (Long) -> Unit, onNewTrip: () -> Unit, vm: History
             }
         } else {
             item {
+                Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Chip("Todas", f.outcome == null) { vm.setFilters { it.copy(outcome = null) } }
+                    listOf(OfferOutcome.ACCEPTED, OfferOutcome.REJECTED, OfferOutcome.EXPIRED).forEach { o ->
+                        Chip(o.label.substringBefore(" ("), f.outcome == o) { vm.setFilters { it.copy(outcome = if (it.outcome == o) null else o) } }
+                    }
+                }
+            }
+            item {
                 Text(
                     "Ofertas vistas e analisadas. Não entram no faturamento — registre como corrida apenas as que você aceitou.",
                     style = MaterialTheme.typography.bodySmall,
@@ -161,6 +170,7 @@ fun HistoryScreen(onEditTrip: (Long) -> Unit, onNewTrip: () -> Unit, vm: History
                     InfoRow("Lucro estimado", Br.money(o.estimatedProfit))
                     InfoRow("Confiança", Br.percent(o.confidence))
                     InfoRow("Origem", o.source.label)
+                    o.outcome?.let { InfoRow("Sua decisão", it.label, note = o.outcomeSource?.label) }
                 }
             },
             confirmButton = {

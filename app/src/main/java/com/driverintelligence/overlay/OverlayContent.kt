@@ -34,6 +34,8 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -63,6 +65,8 @@ import androidx.compose.ui.unit.sp
 import com.driverintelligence.R
 import com.driverintelligence.designsystem.DiColors
 import com.driverintelligence.designsystem.DiTheme
+import com.driverintelligence.domain.detection.OutcomeSource
+import com.driverintelligence.domain.detection.TripPhase
 import com.driverintelligence.domain.model.Classification
 import com.driverintelligence.domain.model.DataSource
 import com.driverintelligence.domain.model.Metric
@@ -70,6 +74,7 @@ import com.driverintelligence.domain.overlay.OverlayAction
 import com.driverintelligence.domain.overlay.OverlayMode
 import com.driverintelligence.domain.recognition.OfferAnalysis
 import com.driverintelligence.domain.util.Br
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.StateFlow
 import kotlin.math.roundToInt
 
@@ -115,8 +120,12 @@ private fun OverlayBody(
 ) {
     val c = DiTheme.colors
     val analysis = state.analysis.takeIf { state.kind == OverlayKind.OFFER }
+    val trip = state.trip.takeIf { state.kind == OverlayKind.TRIP }
+    val summary = state.summary.takeIf { state.kind == OverlayKind.SUMMARY }
     val accent = when (state.kind) {
         OverlayKind.OFFER -> c.of(analysis?.decision?.classification)
+        OverlayKind.TRIP -> phaseColor(trip?.phase, c)
+        OverlayKind.SUMMARY -> if (summary?.cancelled == true) c.neutral else c.positive
         OverlayKind.BLOCKED, OverlayKind.ERROR, OverlayKind.CAPTURE_STOPPED -> c.warning
         OverlayKind.PAUSED -> c.neutral
         else -> c.brand
@@ -139,7 +148,7 @@ private fun OverlayBody(
     }
 
     if (state.mode == OverlayMode.MINIMIZED) {
-        Bubble(analysis, accent, flash.value, state.opacity, drag, pulsing = state.kind == OverlayKind.READING) {
+        Bubble(analysis, state.trip, accent, flash.value, state.opacity, drag, pulsing = state.kind == OverlayKind.READING) {
             onAction(OverlayAction.TOGGLE)
         }
         return
@@ -159,10 +168,12 @@ private fun OverlayBody(
             .animateContentSize(tween(220)),
     ) {
         Box(Modifier.fillMaxWidth().height(3.dp).background(Brush.horizontalGradient(listOf(accent, accent.copy(alpha = 0.15f)))))
-        Header(state, analysis, accent, drag, onAction)
+        Header(state, analysis, trip, accent, drag, onAction)
         Column(Modifier.padding(start = 14.dp, end = 14.dp, bottom = 12.dp)) {
             when (state.kind) {
-                OverlayKind.OFFER -> analysis?.let { OfferBody(it, accent, expanded) }
+                OverlayKind.OFFER -> analysis?.let { OfferBody(it, accent, expanded, state.offerAccepted, callbacks) }
+                OverlayKind.TRIP -> trip?.let { TripBody(it, accent, expanded, callbacks) }
+                OverlayKind.SUMMARY -> summary?.let { SummaryBody(it, callbacks) }
                 OverlayKind.READING -> StatusBody(accent, "Lendo a oferta…", "Mantenha o cartão da oferta visível.", pulsing = true)
                 OverlayKind.WAITING -> StatusBody(accent, "Aguardando oferta", "A análise aparece aqui em cerca de 2 segundos.")
                 OverlayKind.PAUSED -> StatusBody(accent, "Análise pausada", "Nenhuma tela está sendo lida agora.")
@@ -170,7 +181,7 @@ private fun OverlayBody(
                 OverlayKind.BLOCKED -> StatusBody(accent, "Leitura indisponível", state.message ?: "Esta tela bloqueia captura. Use a inserção manual.")
                 OverlayKind.ERROR -> StatusBody(accent, "Falha na leitura", state.message ?: "Tentando novamente…")
             }
-            val showActions = expanded || state.kind == OverlayKind.CAPTURE_STOPPED || state.kind == OverlayKind.BLOCKED || state.kind == OverlayKind.PAUSED
+            val showActions = (expanded && state.kind != OverlayKind.SUMMARY && state.kind != OverlayKind.TRIP) || state.kind == OverlayKind.CAPTURE_STOPPED || state.kind == OverlayKind.BLOCKED || state.kind == OverlayKind.PAUSED
             if (showActions) {
                 Spacer(Modifier.height(12.dp))
                 Actions(state, accent, expanded, callbacks, onOpacityStep)
@@ -183,13 +194,19 @@ private fun OverlayBody(
 // ───────────────────────── Cabeçalho ─────────────────────────
 
 @Composable
-private fun Header(state: OverlayUiState, analysis: OfferAnalysis?, accent: Color, drag: Modifier, onAction: (OverlayAction) -> Unit) {
+private fun Header(state: OverlayUiState, analysis: OfferAnalysis?, trip: LiveTrip?, accent: Color, drag: Modifier, onAction: (OverlayAction) -> Unit) {
     val c = DiTheme.colors
     Row(
         Modifier.fillMaxWidth().then(drag).padding(start = 14.dp, end = 4.dp, top = 8.dp, bottom = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        if (analysis != null) {
+        if (trip != null) {
+            Pill(trip.phase.label.uppercase(), accent)
+            trip.timeline.offer.offer.category?.let {
+                Spacer(Modifier.width(8.dp))
+                Text(it.uppercase(), style = label(c.textTertiary), maxLines = 1)
+            }
+        } else if (analysis != null) {
             Verdict(analysis.decision.classification, accent)
             analysis.offer.category?.let {
                 Spacer(Modifier.width(8.dp))
@@ -212,14 +229,17 @@ private fun Header(state: OverlayUiState, analysis: OfferAnalysis?, accent: Colo
 }
 
 @Composable
-private fun Verdict(classification: Classification, accent: Color) {
+private fun Verdict(classification: Classification, accent: Color) = Pill(classification.shortLabel, accent)
+
+@Composable
+private fun Pill(text: String, accent: Color) {
     Row(
         Modifier.clip(RoundedCornerShape(50)).background(accent.copy(alpha = 0.18f)).padding(horizontal = 9.dp, vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(Modifier.size(7.dp).clip(CircleShape).background(accent))
         Spacer(Modifier.width(6.dp))
-        Text(classification.shortLabel, style = TextStyle(fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 0.8.sp, color = accent))
+        Text(text, style = TextStyle(fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 0.8.sp, color = accent), maxLines = 1)
     }
 }
 
@@ -237,7 +257,7 @@ private fun HeaderIcon(icon: Int, description: String, onClick: () -> Unit) {
 // ───────────────────────── Oferta ─────────────────────────
 
 @Composable
-private fun OfferBody(a: OfferAnalysis, accent: Color, expanded: Boolean) {
+private fun OfferBody(a: OfferAnalysis, accent: Color, expanded: Boolean, accepted: Boolean, callbacks: OverlayCallbacks) {
     val c = DiTheme.colors
     val f = a.financial
     val d = a.decision
@@ -258,7 +278,14 @@ private fun OfferBody(a: OfferAnalysis, accent: Color, expanded: Boolean) {
     Spacer(Modifier.height(10.dp))
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         BigMetric("R$ POR KM", f.revenuePerKm, a.goalOf(Metric.REVENUE_PER_KM), a.met(Metric.REVENUE_PER_KM), Modifier.weight(1f))
-        BigMetric("R$ POR HORA", f.revenuePerHour, a.goalOf(Metric.REVENUE_PER_HOUR), a.met(Metric.REVENUE_PER_HOUR), Modifier.weight(1f), decimals = 0)
+        BigMetric(
+            if (a.usedRealistic) "R$/H REAL EST." else "R$ POR HORA",
+            a.basis.revenuePerHour,
+            a.goalOf(Metric.REVENUE_PER_HOUR),
+            a.met(Metric.REVENUE_PER_HOUR),
+            Modifier.weight(1f),
+            decimals = 0,
+        )
     }
 
     Spacer(Modifier.height(10.dp))
@@ -269,7 +296,7 @@ private fun OfferBody(a: OfferAnalysis, accent: Color, expanded: Boolean) {
             f.operatingProfit?.let { if (it > 0) c.positive else c.negative } ?: c.textTertiary,
         )
         MiniStat("DISTÂNCIA", Br.km(f.totalDistanceKm), c.textPrimary, Alignment.CenterHorizontally)
-        MiniStat("TEMPO", Br.minutes(f.totalTimeMin), c.textPrimary, Alignment.End)
+        MiniStat(if (a.usedRealistic) "TEMPO REAL EST." else "TEMPO", Br.minutes(a.basis.totalTimeMin), c.textPrimary, Alignment.End)
     }
 
     Spacer(Modifier.height(10.dp))
@@ -279,6 +306,23 @@ private fun OfferBody(a: OfferAnalysis, accent: Color, expanded: Boolean) {
         maxLines = if (expanded) 3 else 2,
         overflow = TextOverflow.Ellipsis,
     )
+
+    if (a.usedRealistic && f.totalTimeMin != null) {
+        val tf = a.timeFactors
+        Spacer(Modifier.height(6.dp))
+        Text(
+            "App diz ${Br.minutes(f.totalTimeMin)} · na prática ~${Br.minutes(a.basis.totalTimeMin)}" +
+                (tf?.let { if (it.isLearned) " (seu histórico)" else " (estimativa)" } ?: ""),
+            style = TextStyle(fontSize = 10.sp, color = c.textSecondary, fontFeatureSettings = TNUM),
+        )
+    }
+    a.percentile?.takeIf { !gray }?.let { p ->
+        Spacer(Modifier.height(2.dp))
+        Text(
+            "R$/km melhor que ${(p * 100).roundToInt()}% das suas últimas ${a.benchmarkSize} ofertas",
+            style = TextStyle(fontSize = 10.sp, color = if (p >= 0.5) c.positive else c.textSecondary, fontFeatureSettings = TNUM),
+        )
+    }
 
     a.fareTarget?.takeIf { !gray }?.let { t ->
         val gap = t.gap ?: 0.0
@@ -295,6 +339,8 @@ private fun OfferBody(a: OfferAnalysis, accent: Color, expanded: Boolean) {
             Spacer(Modifier.height(4.dp))
             Text("Estimativa parcial · toque em expandir", style = TextStyle(fontSize = 9.sp, color = c.textTertiary))
         }
+        Spacer(Modifier.height(10.dp))
+        DecisionButtons(accepted, accent, callbacks)
         return
     }
 
@@ -530,13 +576,7 @@ private fun Actions(state: OverlayUiState, accent: Color, expanded: Boolean, cal
         when (state.kind) {
             OverlayKind.CAPTURE_STOPPED -> FilledAction("Retomar captura", c.brand, Modifier.fillMaxWidth()) { callbacks.onRestartCapture() }
             OverlayKind.PAUSED -> FilledAction("Retomar análise", c.brand, Modifier.fillMaxWidth()) { callbacks.onPauseToggle() }
-            OverlayKind.OFFER -> if (state.analysis?.offer?.fare != null) {
-                if (state.offerRegistered) {
-                    GhostAction("✓ Corrida registrada", c.positive, Modifier.fillMaxWidth(), enabled = false) {}
-                } else {
-                    FilledAction("Aceitei · registrar corrida", accent, Modifier.fillMaxWidth()) { callbacks.onRegisterTrip() }
-                }
-            }
+            OverlayKind.OFFER -> if (state.analysis?.offer?.fare != null) DecisionButtons(state.offerAccepted, accent, callbacks)
             else -> Unit
         }
         Row(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
@@ -592,6 +632,7 @@ private fun GhostAction(text: String, color: Color, modifier: Modifier, enabled:
 @Composable
 private fun Bubble(
     analysis: OfferAnalysis?,
+    trip: LiveTrip?,
     accent: Color,
     flash: Float,
     opacity: Float,
@@ -623,7 +664,13 @@ private fun Bubble(
             if (score != null) drawArc(accent, -90f, 360f * animated, false, tl, arc, style = Stroke(s, cap = StrokeCap.Round))
             else drawArc(accent.copy(alpha = 0.7f), -90f, 360f, false, tl, arc, style = Stroke(s))
         }
-        if (analysis != null) {
+        if (trip != null && analysis == null) {
+            val now = rememberNow()
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Text("${(now - trip.timeline.acceptedAt) / 60_000}", style = num(17.sp, FontWeight.Bold, accent))
+                Text("min", style = TextStyle(fontSize = 8.sp, color = c.textTertiary))
+            }
+        } else if (analysis != null) {
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 Text(analysis.financial.revenuePerKm?.let { Br.decimal(it) } ?: "—", style = num(15.sp, FontWeight.Bold, accent))
                 Text("R$/km", style = TextStyle(fontSize = 8.sp, color = c.textTertiary))
@@ -650,4 +697,185 @@ private fun lerpColor(a: Color, b: Color, t: Float): Color {
         blue = a.blue + (b.blue - a.blue) * f,
         alpha = a.alpha + (b.alpha - a.alpha) * f,
     )
+}
+
+// ───────────────────────── Aceitei / Recusei ─────────────────────────
+
+@Composable
+private fun DecisionButtons(accepted: Boolean, accent: Color, callbacks: OverlayCallbacks) {
+    val c = DiTheme.colors
+    if (accepted) {
+        GhostAction("✓ Aceita · acompanhando a corrida", c.positive, Modifier.fillMaxWidth(), enabled = false) {}
+        return
+    }
+    Row(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+        GhostAction("✕ Recusei", c.textSecondary, Modifier.weight(1f)) { callbacks.onReject() }
+        FilledAction("✓ Aceitei", accent, Modifier.weight(1.4f)) { callbacks.onAccept() }
+    }
+}
+
+// ───────────────────────── Corrida ao vivo ─────────────────────────
+
+private fun phaseColor(phase: TripPhase?, c: DiColors): Color = when (phase) {
+    TripPhase.TO_PICKUP -> c.brand
+    TripPhase.WAITING -> c.warning
+    TripPhase.ON_TRIP -> c.positive
+    else -> c.neutral
+}
+
+/** Relógio que redesenha a cada segundo enquanto o cartão está visível. */
+@Composable
+private fun rememberNow(): Long {
+    var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            now = System.currentTimeMillis()
+            delay(1_000)
+        }
+    }
+    return now
+}
+
+private fun clock(ms: Long): String {
+    val total = (ms / 1000).coerceAtLeast(0)
+    val h = total / 3600
+    val m = (total % 3600) / 60
+    val sec = total % 60
+    return if (h > 0) String.format(Br.locale, "%d:%02d:%02d", h, m, sec) else String.format(Br.locale, "%02d:%02d", m, sec)
+}
+
+@Composable
+private fun TripBody(t: LiveTrip, accent: Color, expanded: Boolean, callbacks: OverlayCallbacks) {
+    val c = DiTheme.colors
+    val now = rememberNow()
+    val tl = t.timeline
+    val elapsedMs = now - tl.acceptedAt
+    val elapsedMin = elapsedMs / 60_000.0
+    val predicted = if (t.predictedPickupMin != null && t.predictedTripMin != null) t.predictedPickupMin + t.predictedTripMin else null
+    val ratio = predicted?.takeIf { it > 0 }?.let { elapsedMin / it }
+    val progressColor = when {
+        ratio == null -> accent
+        ratio > 1.3 -> c.negative
+        ratio > 1.0 -> c.warning
+        else -> accent
+    }
+
+    Row(verticalAlignment = Alignment.Bottom) {
+        Column(Modifier.weight(1f)) {
+            Text("TEMPO DESDE O ACEITE", style = label(c.textTertiary))
+            Text(clock(elapsedMs), style = num(32.sp, FontWeight.Bold, c.textPrimary, (-0.8).sp))
+        }
+        Column(horizontalAlignment = Alignment.End) {
+            Text("PREVISTO", style = label(c.textTertiary))
+            Text(predicted?.let { "~${Br.minutes(it)}" } ?: Br.DASH, style = num(15.sp, FontWeight.SemiBold, c.textSecondary))
+        }
+    }
+    Spacer(Modifier.height(8.dp))
+    val p = ratio?.toFloat()?.coerceIn(0f, 1f) ?: 0f
+    Box(Modifier.fillMaxWidth().height(8.dp).clip(RoundedCornerShape(4.dp)).background(c.outline)) {
+        Box(Modifier.fillMaxWidth(p).height(8.dp).clip(RoundedCornerShape(4.dp)).background(progressColor))
+    }
+    if (ratio != null && ratio > 1.0) {
+        Spacer(Modifier.height(4.dp))
+        Text(
+            "Corrida ${((ratio - 1) * 100).roundToInt()}% mais longa que o previsto",
+            style = TextStyle(fontSize = 11.sp, fontWeight = FontWeight.Medium, color = progressColor),
+        )
+    }
+
+    // Ganho por hora ao vivo: cai conforme o tempo passa.
+    Spacer(Modifier.height(10.dp))
+    val fare = t.fare
+    val liveHour = if (fare != null && elapsedMin >= 1.0) fare / (elapsedMin / 60.0) else null
+    val projectedHour = if (fare != null && predicted != null && predicted > 0) fare / (predicted / 60.0) else null
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        BigMetric("R$/H ATÉ AGORA", liveHour, t.goalPerHour, liveHour?.let { it >= t.goalPerHour }, Modifier.weight(1f), decimals = 0)
+        BigMetric("R$/H NO PREVISTO", projectedHour, t.goalPerHour, projectedHour?.let { it >= t.goalPerHour }, Modifier.weight(1f), decimals = 0)
+    }
+
+    Spacer(Modifier.height(10.dp))
+    val pickupEnd = tl.arrivedAt ?: tl.startedAt
+    StageLine("Busca", ((pickupEnd ?: now) - tl.acceptedAt) / 60_000.0, t.offeredPickupMin, done = pickupEnd != null, active = t.phase == TripPhase.TO_PICKUP)
+    val arrived = tl.arrivedAt
+    if (arrived != null && tl.startedAt == null) {
+        StageLine("Espera", (now - arrived) / 60_000.0, null, done = false, active = true)
+    }
+    tl.startedAt?.let { st -> StageLine("Viagem", (now - st) / 60_000.0, t.offeredTripMin, done = false, active = true) }
+
+    if (expanded) {
+        val cost = t.estimatedCost
+        Spacer(Modifier.height(10.dp))
+        Section("CORRIDA") {
+            Line("Valor", Br.money(fare))
+            Line("Custo estimado", cost?.let { "− ${Br.money(it)}" } ?: Br.DASH, c.textSecondary)
+            Line("Lucro estimado", Br.money(if (fare != null && cost != null) fare - cost else null), c.positive, bold = true)
+            Line("Aceite", if (tl.acceptSource == OutcomeSource.MANUAL) "informado por você" else "detectado na tela", c.textSecondary)
+        }
+    }
+
+    Spacer(Modifier.height(10.dp))
+    Row(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+        GhostAction("Cancelada", c.negative, Modifier.weight(1f)) { callbacks.onCancelTrip() }
+        FilledAction("Finalizar corrida", accent, Modifier.weight(1.4f)) { callbacks.onFinishTrip() }
+    }
+}
+
+@Composable
+private fun StageLine(title: String, minutes: Double, offered: Double?, done: Boolean, active: Boolean) {
+    val c = DiTheme.colors
+    val over = offered != null && minutes > offered * 1.15
+    Row(Modifier.fillMaxWidth().padding(vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+        Box(
+            Modifier.size(8.dp).clip(CircleShape).background(
+                when {
+                    done -> c.positive
+                    active -> c.brand
+                    else -> c.outline
+                },
+            ),
+        )
+        Spacer(Modifier.width(8.dp))
+        Text(title, style = TextStyle(fontSize = 12.sp, color = c.textSecondary), modifier = Modifier.weight(1f))
+        Text(
+            Br.minutes(minutes) + (offered?.let { "  (app: ${Br.minutes(it)})" } ?: ""),
+            style = num(12.sp, FontWeight.Medium, if (over) c.warning else c.textPrimary),
+        )
+    }
+}
+
+@Composable
+private fun SummaryBody(s: TripSummary, callbacks: OverlayCallbacks) {
+    val c = DiTheme.colors
+    val tl = s.timeline
+    if (s.cancelled) {
+        StatusBody(c.neutral, "Corrida cancelada", "Nada foi registrado e o tempo não entra no aprendizado.")
+    } else {
+        Text("CORRIDA CONCLUÍDA", style = label(c.textTertiary))
+        Text(Br.money(tl.offer.offer.fare), style = num(28.sp, FontWeight.Bold, c.textPrimary))
+        Spacer(Modifier.height(8.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            BigMetric("R$/H REAL", s.revenuePerHour, null, null, Modifier.weight(1f), decimals = 0)
+            Column(Modifier.weight(1f).clip(TileShape).background(c.surfaceSunken).padding(horizontal = 10.dp, vertical = 8.dp)) {
+                Text("LUCRO EST.", style = label(c.textTertiary))
+                Spacer(Modifier.height(2.dp))
+                val profit = s.profit
+                Text(Br.money(profit), style = num(18.sp, FontWeight.Bold, profit?.let { if (it > 0) c.positive else c.negative } ?: c.textTertiary))
+            }
+        }
+        Spacer(Modifier.height(10.dp))
+        Section("TEMPO") {
+            Line("Real", Br.minutes(tl.totalMin), bold = true)
+            Line("O app prometeu", Br.minutes(s.offeredTotalMin), c.textSecondary)
+            s.predictedTotalMin?.let { Line("Previsão do Driver Intelligence", Br.minutes(it), c.textSecondary) }
+            Line("Busca · viagem", "${Br.minutes(tl.actualPickupMin)} · ${Br.minutes(tl.actualTripMin)}", c.textSecondary)
+        }
+        Spacer(Modifier.height(6.dp))
+        Text(
+            if (s.registered) "Registrada no histórico com os tempos reais. As próximas previsões ficam mais precisas."
+            else "Tempos guardados para melhorar as próximas previsões.",
+            style = TextStyle(fontSize = 10.sp, lineHeight = 13.sp, color = c.textSecondary),
+        )
+    }
+    Spacer(Modifier.height(10.dp))
+    GhostAction("OK", c.textPrimary, Modifier.fillMaxWidth()) { callbacks.onDismissSummary() }
 }

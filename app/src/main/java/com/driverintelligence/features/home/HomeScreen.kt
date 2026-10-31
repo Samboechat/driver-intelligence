@@ -32,6 +32,7 @@ import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.driverintelligence.R
 import com.driverintelligence.capture.AssistantStatus
+import com.driverintelligence.domain.detection.TripPhase
 import com.driverintelligence.designsystem.Banner
 import com.driverintelligence.designsystem.BarChart
 import com.driverintelligence.designsystem.ClassificationBadge
@@ -89,7 +90,9 @@ fun HomeScreen(
         item {
             AssistantCard(
                 status = state.assistant.status,
-                lastHeadline = state.assistant.lastAnalysis?.decision?.headline,
+                lastHeadline = state.assistant.tripPhase.takeIf { it != TripPhase.NONE && it != TripPhase.OFFER }
+                    ?.let { "Corrida em andamento: ${it.label.lowercase()}. Acompanhe na janela flutuante." }
+                    ?: state.assistant.lastAnalysis?.decision?.headline,
                 message = state.assistant.message,
                 onStart = ::start,
                 onStop = { vm.stopAssistant(context) },

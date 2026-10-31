@@ -6,6 +6,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.driverintelligence.data.repository.OfferRepository
 import com.driverintelligence.data.repository.TripRepository
+import com.driverintelligence.domain.detection.OfferOutcome
 import com.driverintelligence.domain.model.AnalyzedOffer
 import com.driverintelligence.domain.model.Classification
 import com.driverintelligence.domain.model.DataSource
@@ -36,6 +37,7 @@ data class HistoryFilters(
     val period: PeriodFilter = PeriodFilter.WEEK,
     val classification: Classification? = null,
     val source: DataSource? = null,
+    val outcome: OfferOutcome? = null,
     val query: String = "",
     val sort: SortOrder = SortOrder.RECENT,
 )
@@ -80,6 +82,7 @@ class HistoryViewModel @Inject constructor(
 
         val o = offers.asSequence()
             .filter { it.detectedAt >= from }
+            .filter { f.outcome == null || it.outcome == f.outcome }
             .filter { f.classification == null || it.classification == f.classification }
             .filter { f.source == null || it.source == f.source }
             .filter { matches(it.category, it.origin, it.destination, Br.money(it.fare)) }

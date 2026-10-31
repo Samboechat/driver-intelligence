@@ -15,6 +15,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
 import com.driverintelligence.data.prefs.SettingsRepository
+import com.driverintelligence.data.repository.IntelligenceRepository
 import com.driverintelligence.data.repository.OfferRepository
 import com.driverintelligence.data.repository.SessionRepository
 import com.driverintelligence.data.repository.TripRepository
@@ -28,6 +29,12 @@ import com.driverintelligence.designsystem.MetricTile
 import com.driverintelligence.designsystem.SegmentedSelector
 import com.driverintelligence.domain.analytics.AnalyticsEngine
 import com.driverintelligence.domain.analytics.Bucket
+import com.driverintelligence.domain.analytics.TimeCalibration
+import com.driverintelligence.domain.analytics.TimeFactors
+import com.driverintelligence.domain.analytics.TimingSample
+import com.driverintelligence.domain.detection.OfferOutcome
+import com.driverintelligence.domain.model.TripTiming
+import com.driverintelligence.features.common.shortDateTime
 import com.driverintelligence.domain.analytics.PeriodSummary
 import com.driverintelligence.domain.analytics.SeriesPoint
 import com.driverintelligence.domain.model.Classification
@@ -47,6 +54,22 @@ import javax.inject.Inject
 
 enum class StatsPeriod(val label: String, val days: Int) { WEEK("7 dias", 7), MONTH("30 dias", 30), QUARTER("90 dias", 90) }
 
+/** Decisões do motorista e precisão dos tempos dos apps. */
+data class IntelUi(
+    val accepted: Int = 0,
+    val rejected: Int = 0,
+    val expired: Int = 0,
+    /** Ofertas verdes recusadas/ignoradas. */
+    val goodMissed: Int = 0,
+    /** Ofertas vermelhas aceitas. */
+    val badAccepted: Int = 0,
+    val factors: TimeFactors? = null,
+    val avgExtraMin: Double? = null,
+    val recent: List<TripTiming> = emptyList(),
+) {
+    val decided: Int get() = accepted + rejected + expired
+}
+
 data class GoalProgress(val label: String, val value: Double, val goal: Double)
 
 data class StatsUiState(
@@ -63,10 +86,12 @@ data class StatsUiState(
     val offersAnalyzed: Int = 0,
     val offersByClass: Map<Classification, Int> = emptyMap(),
     val offersRegistered: Int = 0,
+    val intel: IntelUi = IntelUi(),
 )
 
 @HiltViewModel
 class StatisticsViewModel @Inject constructor(
+    intelligence: IntelligenceRepository,
     trips: TripRepository,
     offers: OfferRepository,
     sessions: SessionRepository,
@@ -75,7 +100,28 @@ class StatisticsViewModel @Inject constructor(
 ) : ViewModel() {
     private val period = MutableStateFlow(StatsPeriod.MONTH)
 
-    val state: StateFlow<StatsUiState> = combine(period, trips.trips, offers.all, sessions.sessions, settings.settings) { p, t, o, s, st ->
+    private val intel = combine(period, offers.all, intelligence.timings, settings.settings) { p, o, timings, st ->
+        val (from, _) = analytics.dayRange(LocalDate.now().minusDays((p.days - 1).toLong()))
+        val inPeriod = o.filter { it.detectedAt >= from }
+        val timingsIn = timings.filter { it.acceptedAt >= from }
+        val extras = timingsIn.mapNotNull { t -> val a = t.actualTotal; val b = t.offeredTotal; if (a != null && b != null) a - b else null }
+        IntelUi(
+            accepted = inPeriod.count { it.outcome == OfferOutcome.ACCEPTED },
+            rejected = inPeriod.count { it.outcome == OfferOutcome.REJECTED },
+            expired = inPeriod.count { it.outcome == OfferOutcome.EXPIRED },
+            goodMissed = inPeriod.count { it.classification == Classification.GREEN && (it.outcome == OfferOutcome.REJECTED || it.outcome == OfferOutcome.EXPIRED) },
+            badAccepted = inPeriod.count { it.classification == Classification.RED && it.outcome == OfferOutcome.ACCEPTED },
+            factors = TimeCalibration(
+                timings.map { TimingSample(it.acceptedAt, it.offeredPickupMin, it.actualPickupMin, it.offeredTripMin, it.actualTripMin) },
+                st.intelligence.defaultPickupFactor,
+                st.intelligence.defaultTripFactor,
+            ).overall(),
+            avgExtraMin = if (extras.isEmpty()) null else extras.average(),
+            recent = timings.take(5),
+        )
+    }
+
+    private val base = combine(period, trips.trips, offers.all, sessions.sessions, settings.settings) { p, t, o, s, st ->
         val today = LocalDate.now()
         val start = today.minusDays((p.days - 1).toLong())
         val (from, _) = analytics.dayRange(start)
@@ -100,7 +146,10 @@ class StatisticsViewModel @Inject constructor(
             offersByClass = offersIn.groupingBy { it.classification }.eachCount(),
             offersRegistered = offersIn.count { it.isRegistered },
         )
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), StatsUiState())
+    }
+
+    val state: StateFlow<StatsUiState> = combine(base, intel) { b, i -> b.copy(intel = i) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), StatsUiState())
 
     fun setPeriod(p: StatsPeriod) {
         period.value = p
@@ -166,6 +215,7 @@ fun StatisticsScreen(vm: StatisticsViewModel = hiltViewModel()) {
             }
         }
 
+        item { IntelCard(s.intel) }
         item {
             ChartCard("Faturamento diário", "Barra interna: lucro estimado") {
                 BarChart(s.daily.map { it.revenue }, s.daily.map { it.label }, secondary = s.daily.map { it.profit }, labelEvery = if (s.daily.size > 10) 5 else 1, description = "Faturamento diário")
@@ -232,5 +282,67 @@ private fun ChartCard(title: String, subtitle: String, content: @Composable () -
         Text(subtitle, style = MaterialTheme.typography.bodySmall, color = c.textTertiary)
         Spacer(Modifier.height(12.dp))
         content()
+    }
+}
+
+@Composable
+private fun IntelCard(i: IntelUi) {
+    val c = DiTheme.colors
+    DiCard {
+        Text("Suas decisões", style = MaterialTheme.typography.titleMedium, color = c.textPrimary)
+        Text("Detectadas na tela ou marcadas no overlay", style = MaterialTheme.typography.bodySmall, color = c.textTertiary)
+        Spacer(Modifier.height(10.dp))
+        if (i.decided == 0) {
+            Text("Ainda sem decisões registradas no período.", style = MaterialTheme.typography.bodySmall, color = c.textTertiary)
+        } else {
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                MetricTile("Aceitas", i.accepted.toString(), Modifier.weight(1f), valueColor = c.positive)
+                MetricTile("Recusadas", i.rejected.toString(), Modifier.weight(1f), valueColor = c.negative)
+                MetricTile("Ignoradas", i.expired.toString(), Modifier.weight(1f))
+            }
+            Spacer(Modifier.height(8.dp))
+            InfoRow("Taxa de aceite", Br.percent(i.accepted.toDouble() / i.decided))
+            InfoRow("Boas ofertas que você deixou passar", i.goodMissed.toString(), valueColor = if (i.goodMissed > 0) c.warning else null, note = "classificadas como rentáveis")
+            InfoRow("Ofertas abaixo da meta que você aceitou", i.badAccepted.toString(), valueColor = if (i.badAccepted > 0) c.negative else null)
+        }
+    }
+    Spacer(Modifier.height(12.dp))
+    DiCard {
+        Text("Tempo real × tempo do app", style = MaterialTheme.typography.titleMedium, color = c.textPrimary)
+        Text("Aprendido com as corridas acompanhadas do aceite ao fim", style = MaterialTheme.typography.bodySmall, color = c.textTertiary)
+        Spacer(Modifier.height(10.dp))
+        val f = i.factors
+        if (f != null) {
+            InfoRow(
+                "Busca até o passageiro",
+                "+${Br.percent(f.pickup - 1)}",
+                valueColor = if (f.pickup > 1.15) c.warning else null,
+                note = "${f.pickupSource.label} · ${f.pickupSamples} corrida(s)",
+            )
+            InfoRow(
+                "Viagem com passageiro",
+                "+${Br.percent(f.trip - 1)}",
+                valueColor = if (f.trip > 1.15) c.warning else null,
+                note = "${f.tripSource.label} · ${f.tripSamples} corrida(s)",
+            )
+        }
+        i.avgExtraMin?.let { InfoRow("Minutos a mais por corrida (média)", Br.minutes(it), emphasize = true) }
+        if (i.recent.isNotEmpty()) {
+            Spacer(Modifier.height(8.dp))
+            Text("ÚLTIMAS CORRIDAS MEDIDAS", style = MaterialTheme.typography.labelSmall, color = c.textTertiary)
+            i.recent.forEach { t ->
+                InfoRow(
+                    shortDateTime(t.acceptedAt),
+                    "${Br.minutes(t.actualTotal)} (app: ${Br.minutes(t.offeredTotal)})",
+                    valueColor = if ((t.actualTotal ?: 0.0) > (t.offeredTotal ?: Double.MAX_VALUE) * 1.2) c.warning else null,
+                )
+            }
+        } else {
+            Text(
+                "Até 5 corridas medidas, o app usa a estimativa padrão (ajustável em Ajustes → Inteligência).",
+                style = MaterialTheme.typography.bodySmall,
+                color = c.textTertiary,
+            )
+        }
     }
 }

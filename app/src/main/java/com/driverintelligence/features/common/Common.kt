@@ -30,6 +30,7 @@ import com.driverintelligence.designsystem.DiNumbers
 import com.driverintelligence.designsystem.DiTheme
 import com.driverintelligence.designsystem.DiTopBar
 import com.driverintelligence.designsystem.Tag
+import com.driverintelligence.domain.detection.OfferOutcome
 import com.driverintelligence.domain.model.AnalyzedOffer
 import com.driverintelligence.domain.model.Classification
 import com.driverintelligence.domain.model.DataSource
@@ -110,7 +111,20 @@ fun OfferRow(offer: AnalyzedOffer, modifier: Modifier = Modifier, onClick: (() -
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(Br.money(offer.fare), style = DiNumbers.medium, color = c.textPrimary)
                 Spacer(Modifier.width(8.dp))
-                if (offer.isRegistered) Tag("REALIZADA", c.positive)
+                if (offer.isRegistered) {
+                    Tag("REALIZADA", c.positive)
+                } else {
+                    offer.outcome?.takeIf { it != OfferOutcome.UNKNOWN }?.let { o ->
+                        Tag(
+                            o.shortLabel,
+                            when (o) {
+                                OfferOutcome.ACCEPTED -> c.positive
+                                OfferOutcome.REJECTED -> c.negative
+                                else -> c.textSecondary
+                            },
+                        )
+                    }
+                }
                 if (offer.source == DataSource.MANUAL) {
                     Spacer(Modifier.width(4.dp))
                     Tag("MANUAL", c.textSecondary)
