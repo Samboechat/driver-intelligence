@@ -49,7 +49,7 @@ data class ManualUiState(
 
 @HiltViewModel
 class ManualAnalysisViewModel @Inject constructor(
-    savedState: SavedStateHandle,
+    private val savedState: SavedStateHandle,
     contextProvider: AnalysisContextProvider,
     private val analyzer: OfferAnalyzer,
     private val offers: OfferRepository,
