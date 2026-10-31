@@ -19,7 +19,8 @@ android {
         applicationId = "com.driverintelligence.app"
         minSdk = 29
         targetSdk = 35
-        versionCode = 1
+        // Cada build do GitHub Actions gera um número de versão maior.
+        versionCode = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull() ?: 1
         versionName = "0.1.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables { useSupportLibrary = true }
@@ -31,6 +32,14 @@ android {
     }
 
     signingConfigs {
+        // Chave de teste FIXA, versionada no repositório: todo build de teste tem a mesma
+        // assinatura, então o Android aceita instalar uma versão nova por cima da anterior.
+        getByName("debug") {
+            storeFile = file("debug.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
         if (releaseKeystore != null) {
             create("release") {
                 storeFile = file(releaseKeystore)
