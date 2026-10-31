@@ -444,7 +444,7 @@ private fun BigMetric(title: String, value: Double?, goal: Double?, met: Boolean
                 maxLines = 1,
             )
             Text(
-                goal?.let { "meta ${Br.decimal(it, decimals)}" } ?: "sem dado",
+                goal?.let { "meta ${Br.decimal(it, decimals)}" } ?: if (value == null) "sem dado" else "medido",
                 style = TextStyle(fontSize = 9.sp, color = status, fontWeight = FontWeight.Medium, fontFeatureSettings = TNUM),
             )
         }
@@ -790,7 +790,7 @@ private fun TripBody(t: LiveTrip, accent: Color, expanded: Boolean, callbacks: O
     val projectedHour = if (fare != null && predicted != null && predicted > 0) fare / (predicted / 60.0) else null
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         BigMetric("R$/H ATÉ AGORA", liveHour, t.goalPerHour, liveHour?.let { it >= t.goalPerHour }, Modifier.weight(1f), decimals = 0)
-        BigMetric("R$/H NO PREVISTO", projectedHour, t.goalPerHour, projectedHour?.let { it >= t.goalPerHour }, Modifier.weight(1f), decimals = 0)
+        BigMetric("R$/H PREVISTO", projectedHour, t.goalPerHour, projectedHour?.let { it >= t.goalPerHour }, Modifier.weight(1f), decimals = 0)
     }
 
     Spacer(Modifier.height(10.dp))

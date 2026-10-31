@@ -23,6 +23,17 @@ Captura (MediaProjection) → máscara do overlay → OCR local (ML Kit) → ext
 | Dashboard, histórico (busca, filtros, ordenação, edição, exclusão, CSV), estatísticas, veículos, metas, critérios, permissões, laboratório de OCR | Implementado |
 | Banco Room + DataStore | Implementado — testes Robolectric inclusos (8) |
 
+## Inteligência de corrida
+
+- **Tempo realista:** o app compara o tempo que a oferta promete com o tempo real das corridas que você fez e aprende o atraso típico (mediana, com recorte por horário de pico). Cada oferta mostra "App diz 24 min · na prática ~32 min" e a classificação usa o tempo realista.
+- **Aceite e recusa detectados:** pela tela seguinte à oferta (busca do passageiro = aceita; volta para "procurando viagens" = recusada; ficou até o fim = ignorada). Botões Aceitei/Recusei corrigem quando a leitura falhar.
+- **Corrida ao vivo:** relógio desde o aceite, previsão, alerta de atraso, R$/h caindo em tempo real, etapas busca/espera/viagem.
+- **Resumo automático:** ao concluir, registra a corrida com os tempos reais e mostra real × prometido.
+- **Comparativo:** "R$/km melhor que X% das suas últimas ofertas" e valor justo para cumprir suas metas.
+- **Estatísticas de decisões:** taxa de aceite, boas ofertas que passaram, ruins aceitas e quanto cada app erra no tempo.
+
+As telas pós-aceite são reconhecidas por palavras-chave comuns do Uber Driver ("Cheguei", "Iniciar viagem", "Finalizar viagem", "Viagem concluída"...). Se o seu app usar outros textos, a detecção automática falha e os botões do overlay continuam funcionando.
+
 ## Limitações reais (leia antes de usar)
 
 1. **Compilação**: este código foi escrito num ambiente sem acesso ao Google Maven/SDK Android. O núcleo em Kotlin puro (motor financeiro, parser, estados, estatísticas) foi **compilado e testado de verdade** (96 testes). A camada Android foi revisada, mas **ainda não foi compilada**: o primeiro build (GitHub Actions ou Android Studio) pode apontar erros pontuais a corrigir. Ver [docs/RELATORIO_DE_TESTES.md](docs/RELATORIO_DE_TESTES.md).
