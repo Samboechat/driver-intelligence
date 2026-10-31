@@ -34,12 +34,27 @@ data class CapturePrefs(
     val maxWidth: Int = 1080,
 )
 
+/** Inteligência de corrida: tempo realista e acompanhamento do aceite/recusa. */
+data class IntelligencePrefs(
+    /** Multiplicador padrão do tempo de busca até haver corridas medidas suficientes. */
+    val defaultPickupFactor: Double = 1.35,
+    /** Multiplicador padrão do tempo de viagem. */
+    val defaultTripFactor: Double = 1.15,
+    /** Classificar as ofertas pelo tempo realista. */
+    val useRealisticTime: Boolean = true,
+    /** Detectar aceite/recusa e acompanhar a corrida pela tela. */
+    val autoTrack: Boolean = true,
+    /** Registrar como realizada, com tempos reais, a corrida concluída detectada. */
+    val autoRegister: Boolean = true,
+)
+
 data class AppSettings(
     val goals: Goals = Goals(),
     val scoring: ScoringConfig = ScoringConfig(),
     val emptyReturn: EmptyReturnScenario = EmptyReturnScenario.None,
     val overlay: OverlayPrefs = OverlayPrefs(),
     val capture: CapturePrefs = CapturePrefs(),
+    val intelligence: IntelligencePrefs = IntelligencePrefs(),
     val theme: ThemeMode = ThemeMode.DARK,
     val onboardingDone: Boolean = false,
 )

@@ -1,6 +1,11 @@
 package com.driverintelligence.data.repository
 
+import com.driverintelligence.data.local.AnalyzedOfferEntity
+import com.driverintelligence.data.local.IntelligenceDao
 import com.driverintelligence.data.local.OfferDao
+import com.driverintelligence.data.local.OfferOutcomeEntity
+import com.driverintelligence.data.local.TripTimingEntity
+import com.driverintelligence.data.local.enumOr
 import com.driverintelligence.data.local.SessionDao
 import com.driverintelligence.data.local.TripDao
 import com.driverintelligence.data.local.TripEntity
@@ -10,7 +15,14 @@ import com.driverintelligence.data.local.customCostEntities
 import com.driverintelligence.data.local.toDomain
 import com.driverintelligence.data.local.toEntity
 import com.driverintelligence.data.prefs.SettingsRepository
+import com.driverintelligence.domain.analytics.OfferBenchmark
 import com.driverintelligence.domain.analytics.SessionRecord
+import com.driverintelligence.domain.analytics.TimeCalibration
+import com.driverintelligence.domain.analytics.TimingSample
+import com.driverintelligence.domain.detection.OfferOutcome
+import com.driverintelligence.domain.detection.OutcomeSource
+import com.driverintelligence.domain.detection.TripTimeline
+import com.driverintelligence.domain.model.TripTiming
 import com.driverintelligence.domain.model.AnalyzedOffer
 import com.driverintelligence.domain.model.CostProfile
 import com.driverintelligence.domain.model.Trip
@@ -46,6 +58,7 @@ class VehicleRepository @Inject constructor(private val dao: VehicleDao) {
 class TripRepository @Inject constructor(
     private val dao: TripDao,
     private val offerDao: OfferDao,
+    private val intelligenceDao: IntelligenceDao,
 ) {
     val trips: Flow<List<Trip>> = dao.observeAll().map { list -> list.map(TripEntity::toDomain) }
 
@@ -67,6 +80,7 @@ class TripRepository @Inject constructor(
 
     suspend fun delete(id: Long) {
         offerDao.unlinkTrip(id)
+        intelligenceDao.deleteTiming(id)
         dao.delete(id)
     }
 
@@ -109,10 +123,27 @@ class TripRepository @Inject constructor(
 }
 
 @Singleton
-class OfferRepository @Inject constructor(private val dao: OfferDao) {
-    val all: Flow<List<AnalyzedOffer>> = dao.observeAll().map { list -> list.map { it.toDomain() } }
+class OfferRepository @Inject constructor(private val dao: OfferDao, private val intelligenceDao: IntelligenceDao) {
+    private val outcomes = intelligenceDao.observeOutcomes().map { list -> list.associateBy { it.offerId } }
 
-    fun recent(limit: Int): Flow<List<AnalyzedOffer>> = dao.observeRecent(limit).map { list -> list.map { it.toDomain() } }
+    private fun withOutcomes(flow: Flow<List<AnalyzedOfferEntity>>): Flow<List<AnalyzedOffer>> =
+        combine(flow, outcomes) { list, map ->
+            list.map { e ->
+                val o = map[e.id]
+                e.toDomain().copy(
+                    outcome = o?.let { enumOr(it.outcome, OfferOutcome.UNKNOWN) },
+                    outcomeSource = o?.let { enumOr(it.source, OutcomeSource.DETECTED) },
+                )
+            }
+        }
+
+    val all: Flow<List<AnalyzedOffer>> = withOutcomes(dao.observeAll())
+
+    fun recent(limit: Int): Flow<List<AnalyzedOffer>> = withOutcomes(dao.observeRecent(limit))
+
+    /** Registra o que o motorista fez com a oferta (aceita, recusada, ignorada). */
+    suspend fun setOutcome(offerId: Long, outcome: OfferOutcome, source: OutcomeSource, at: Long) =
+        intelligenceDao.upsertOutcome(OfferOutcomeEntity(offerId, outcome.name, source.name, at))
 
     suspend fun get(id: Long): AnalyzedOffer? = dao.get(id)?.toDomain()
 
@@ -126,7 +157,10 @@ class OfferRepository @Inject constructor(private val dao: OfferDao) {
         return dao.insert(AnalyzedOffer.from(analysis, now, vehicleId).toEntity())
     }
 
-    suspend fun delete(id: Long) = dao.delete(id)
+    suspend fun delete(id: Long) {
+        intelligenceDao.deleteOutcome(id)
+        dao.delete(id)
+    }
 
     /** Política de retenção: ofertas não registradas mais antigas que [days] dias. */
     suspend fun purgeOlderThan(days: Int, now: Long = System.currentTimeMillis()): Int =
@@ -147,14 +181,70 @@ class SessionRepository @Inject constructor(private val dao: SessionDao) {
 class AnalysisContextProvider @Inject constructor(
     vehicles: VehicleRepository,
     settings: SettingsRepository,
+    intelligence: IntelligenceRepository,
+    offerDao: OfferDao,
 ) {
-    val context: Flow<AnalysisContext> = combine(vehicles.activeVehicle, settings.settings) { vehicle, s ->
+    private val benchmark = offerDao.observeRecent(300).map { list -> OfferBenchmark(list.mapNotNull { it.revenuePerKm }) }
+
+    val context: Flow<AnalysisContext> = combine(vehicles.activeVehicle, settings.settings, intelligence.samples, benchmark) { vehicle, s, samples, bench ->
         AnalysisContext(
             costs = vehicle?.toCostProfile() ?: CostProfile.EMPTY,
             goals = s.goals,
             scoring = s.scoring,
             emptyReturn = s.emptyReturn,
             vehicleId = vehicle?.id,
+            calibration = TimeCalibration(samples, s.intelligence.defaultPickupFactor, s.intelligence.defaultTripFactor),
+            benchmark = bench,
+            useRealisticTime = s.intelligence.useRealisticTime,
         )
-    }.distinctUntilChanged()
+    }
+}
+
+/** Resultados das ofertas e tempos reais das corridas: a "memória" que deixa a análise mais precisa. */
+@Singleton
+class IntelligenceRepository @Inject constructor(
+    private val dao: IntelligenceDao,
+    private val trips: TripRepository,
+    private val offerDao: OfferDao,
+) {
+    val timings: Flow<List<TripTiming>> = dao.observeTimings().map { list -> list.map { it.toDomain() } }
+
+    val samples: Flow<List<TimingSample>> = timings.map { list ->
+        list.map { TimingSample(it.acceptedAt, it.offeredPickupMin, it.actualPickupMin, it.offeredTripMin, it.actualTripMin) }
+    }
+
+    /**
+     * Corrida acompanhada do aceite ao fim: registra como REALIZADA com os tempos reais
+     * (indicadores recalculados) e guarda o par prometido × real para o aprendizado.
+     */
+    suspend fun saveCompletedTrip(tl: TripTimeline, offerId: Long?, ctx: AnalysisContext, register: Boolean): Long? {
+        val offer = tl.offer.offer
+        var tripId: Long? = offerId?.let { offerDao.get(it)?.registeredTripId }
+        if (register && tripId == null) {
+            val actual = offer.copy(pickupTimeMin = tl.actualPickupMin ?: offer.pickupTimeMin, tripTimeMin = tl.actualTripMin ?: offer.tripTimeMin)
+            val base = Trip.fromAnalysis(tl.offer, tl.acceptedAt, ctx.vehicleId, offerId).copy(
+                pickupMin = actual.pickupTimeMin,
+                tripMin = actual.tripTimeMin,
+                notes = "Registrada automaticamente · tempos reais medidos",
+            )
+            tripId = trips.save(base.recalculated(ctx))
+            if (offerId != null) offerDao.markRegistered(offerId, tripId)
+        }
+        val id = tripId ?: return null
+        dao.upsertTiming(
+            TripTimingEntity(
+                tripId = id,
+                acceptedAt = tl.acceptedAt,
+                arrivedAt = tl.arrivedAt,
+                startedAt = tl.startedAt,
+                completedAt = tl.completedAt,
+                offeredPickupMin = offer.pickupTimeMin,
+                offeredTripMin = offer.tripTimeMin,
+                actualPickupMin = tl.actualPickupMin,
+                actualTripMin = tl.actualTripMin,
+                autoDetected = tl.acceptSource == OutcomeSource.DETECTED,
+            ),
+        )
+        return id
+    }
 }

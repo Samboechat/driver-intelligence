@@ -35,6 +35,7 @@ object AppModule {
     @Provides fun tripDao(db: AppDatabase): TripDao = db.tripDao()
     @Provides fun offerDao(db: AppDatabase): OfferDao = db.offerDao()
     @Provides fun sessionDao(db: AppDatabase): SessionDao = db.sessionDao()
+    @Provides fun intelligenceDao(db: AppDatabase): com.driverintelligence.data.local.IntelligenceDao = db.intelligenceDao()
 
     @Provides @Singleton fun financialEngine(): FinancialEngine = FinancialEngine()
     @Provides @Singleton fun decisionEngine(): DecisionEngine = DecisionEngine()

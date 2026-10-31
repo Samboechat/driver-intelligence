@@ -187,3 +187,16 @@ fun AnalyzedOffer.toEntity() = AnalyzedOfferEntity(
     surge = surge,
     registeredTripId = registeredTripId,
 )
+
+fun TripTimingEntity.toDomain() = com.driverintelligence.domain.model.TripTiming(
+    tripId = tripId,
+    acceptedAt = acceptedAt,
+    arrivedAt = arrivedAt,
+    startedAt = startedAt,
+    completedAt = completedAt,
+    offeredPickupMin = offeredPickupMin,
+    offeredTripMin = offeredTripMin,
+    actualPickupMin = actualPickupMin,
+    actualTripMin = actualTripMin,
+    autoDetected = autoDetected,
+)

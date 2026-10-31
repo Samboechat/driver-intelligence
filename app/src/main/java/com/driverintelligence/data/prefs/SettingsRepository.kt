@@ -18,6 +18,7 @@ import com.driverintelligence.domain.model.CapturePrefs
 import com.driverintelligence.domain.model.CaptureRegion
 import com.driverintelligence.domain.model.EmptyReturnScenario
 import com.driverintelligence.domain.model.Goals
+import com.driverintelligence.domain.model.IntelligencePrefs
 import com.driverintelligence.domain.model.OverlayPrefs
 import com.driverintelligence.domain.model.ScoringConfig
 import com.driverintelligence.domain.model.ScoringWeights
@@ -81,6 +82,12 @@ class SettingsRepository @Inject constructor(@ApplicationContext private val con
         val captureRegion = stringPreferencesKey("capture_region")
         val captureContrast = booleanPreferencesKey("capture_contrast")
         val captureMaxWidth = intPreferencesKey("capture_max_width")
+
+        val intPickup = doublePreferencesKey("int_default_pickup_factor")
+        val intTrip = doublePreferencesKey("int_default_trip_factor")
+        val intRealistic = booleanPreferencesKey("int_use_realistic")
+        val intAutoTrack = booleanPreferencesKey("int_auto_track")
+        val intAutoRegister = booleanPreferencesKey("int_auto_register")
 
         val theme = stringPreferencesKey("theme")
         val onboardingDone = booleanPreferencesKey("onboarding_done")
@@ -157,6 +164,23 @@ class SettingsRepository @Inject constructor(@ApplicationContext private val con
         p[K.captureRegion] = next.region.name
         p[K.captureContrast] = next.enhanceContrast
         p[K.captureMaxWidth] = next.maxWidth.coerceIn(540, 1440)
+    }
+
+    suspend fun updateIntelligence(transform: (IntelligencePrefs) -> IntelligencePrefs) = edit { p ->
+        val d = IntelligencePrefs()
+        val cur = IntelligencePrefs(
+            defaultPickupFactor = p[K.intPickup] ?: d.defaultPickupFactor,
+            defaultTripFactor = p[K.intTrip] ?: d.defaultTripFactor,
+            useRealisticTime = p[K.intRealistic] ?: d.useRealisticTime,
+            autoTrack = p[K.intAutoTrack] ?: d.autoTrack,
+            autoRegister = p[K.intAutoRegister] ?: d.autoRegister,
+        )
+        val n = transform(cur)
+        p[K.intPickup] = n.defaultPickupFactor.coerceIn(1.0, 3.0)
+        p[K.intTrip] = n.defaultTripFactor.coerceIn(1.0, 3.0)
+        p[K.intRealistic] = n.useRealisticTime
+        p[K.intAutoTrack] = n.autoTrack
+        p[K.intAutoRegister] = n.autoRegister
     }
 
     suspend fun setTheme(mode: ThemeMode) = edit { it[K.theme] = mode.name }
@@ -241,6 +265,15 @@ class SettingsRepository @Inject constructor(@ApplicationContext private val con
             emptyReturn = emptyReturn,
             overlay = overlayPrefs(),
             capture = capturePrefs(),
+            intelligence = IntelligencePrefs().let { d ->
+                IntelligencePrefs(
+                    defaultPickupFactor = this[K.intPickup] ?: d.defaultPickupFactor,
+                    defaultTripFactor = this[K.intTrip] ?: d.defaultTripFactor,
+                    useRealisticTime = this[K.intRealistic] ?: d.useRealisticTime,
+                    autoTrack = this[K.intAutoTrack] ?: d.autoTrack,
+                    autoRegister = this[K.intAutoRegister] ?: d.autoRegister,
+                )
+            },
             theme = this[K.theme]?.let { v -> ThemeMode.entries.firstOrNull { it.name == v } } ?: ThemeMode.DARK,
             onboardingDone = this[K.onboardingDone] ?: false,
         )

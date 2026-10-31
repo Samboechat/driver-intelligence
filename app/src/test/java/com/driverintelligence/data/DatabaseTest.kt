@@ -4,9 +4,13 @@ import android.content.Context
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import com.driverintelligence.data.local.AppDatabase
+import com.driverintelligence.data.repository.IntelligenceRepository
 import com.driverintelligence.data.repository.OfferRepository
 import com.driverintelligence.data.repository.TripRepository
 import com.driverintelligence.data.repository.VehicleRepository
+import com.driverintelligence.domain.detection.OfferOutcome
+import com.driverintelligence.domain.detection.OutcomeSource
+import com.driverintelligence.domain.detection.TripTimeline
 import com.driverintelligence.domain.model.CostItem
 import com.driverintelligence.domain.model.CostProfile
 import com.driverintelligence.domain.model.CostSource
@@ -39,6 +43,7 @@ class DatabaseTest {
     private lateinit var vehicles: VehicleRepository
     private lateinit var trips: TripRepository
     private lateinit var offers: OfferRepository
+    private lateinit var intelligence: IntelligenceRepository
     private val analyzer = OfferAnalyzer()
 
     @Before
@@ -46,8 +51,9 @@ class DatabaseTest {
         val context = ApplicationProvider.getApplicationContext<Context>()
         db = Room.inMemoryDatabaseBuilder(context, AppDatabase::class.java).allowMainThreadQueries().build()
         vehicles = VehicleRepository(db.vehicleDao())
-        trips = TripRepository(db.tripDao(), db.offerDao())
-        offers = OfferRepository(db.offerDao())
+        trips = TripRepository(db.tripDao(), db.offerDao(), db.intelligenceDao())
+        offers = OfferRepository(db.offerDao(), db.intelligenceDao())
+        intelligence = IntelligenceRepository(db.intelligenceDao(), trips, db.offerDao())
     }
 
     @After
@@ -149,5 +155,72 @@ class DatabaseTest {
         offers.record(recent, null, now = now)
         assertEquals(1, offers.purgeOlderThan(30, now))
         assertEquals(1, offers.all.first().size)
+    }
+
+    @Test
+    fun resultadoDaOferta_aparecenaListagem() = runTest {
+        val a = analyzer.analyzeManual(OfferData(18.5, 1.2, 9.3, 4.0, 20.0), AnalysisContext())
+        val id = offers.record(a, null)!!
+        offers.setOutcome(id, OfferOutcome.REJECTED, OutcomeSource.DETECTED, 1L)
+        assertEquals(OfferOutcome.REJECTED, offers.all.first().single().outcome)
+        offers.setOutcome(id, OfferOutcome.ACCEPTED, OutcomeSource.MANUAL, 2L)
+        val o = offers.all.first().single()
+        assertEquals(OfferOutcome.ACCEPTED, o.outcome)
+        assertEquals(OutcomeSource.MANUAL, o.outcomeSource)
+    }
+
+    @Test
+    fun corridaAcompanhada_registraComTemposReaisEAlimentaAprendizado() = runTest {
+        val ctx = AnalysisContext(costs = CostProfile(11.0, 6.2))
+        val a = analyzer.analyzeManual(OfferData(18.5, 1.2, 9.3, 4.0, 20.0), ctx)
+        val offerId = offers.record(a, null)!!
+        val tl = TripTimeline(a, acceptedAt = 0, arrivedAt = 7 * 60_000L, startedAt = 9 * 60_000L, completedAt = 35 * 60_000L)
+        val tripId = intelligence.saveCompletedTrip(tl, offerId, ctx, register = true)!!
+
+        val t = trips.get(tripId)!!
+        assertEquals(7.0, t.pickupMin!!, 1e-9)
+        assertEquals(26.0, t.tripMin!!, 1e-9)
+        assertEquals(33.0, t.totalMin!!, 1e-9)
+        assertEquals(18.5 / (33.0 / 60.0), t.revenuePerHour!!, 1e-6)
+        assertTrue(offers.get(offerId)!!.isRegistered)
+
+        val sample = intelligence.samples.first().single()
+        assertEquals(4.0, sample.offeredPickupMin!!, 1e-9)
+        assertEquals(7.0, sample.actualPickupMin!!, 1e-9)
+
+        // Mesma corrida de novo não duplica.
+        assertEquals(tripId, intelligence.saveCompletedTrip(tl, offerId, ctx, register = true))
+        assertEquals(1, trips.trips.first().size)
+
+        // Excluir a corrida apaga os tempos medidos.
+        trips.delete(tripId)
+        assertTrue(intelligence.samples.first().isEmpty())
+    }
+
+    @Test
+    fun migracao_1_para_2_preservaDadosECriaTabelasNovas() = runTest {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val name = "migracao-teste.db"
+        context.deleteDatabase(name)
+        // Monta um banco equivalente à v1: esquema atual sem as tabelas da v2 e user_version = 1.
+        Room.databaseBuilder(context, AppDatabase::class.java, name).allowMainThreadQueries().build().also { v ->
+            VehicleRepository(v.vehicleDao()).save(Vehicle(name = "Carro antigo", consumptionCity = 10.0))
+            v.openHelper.writableDatabase.apply {
+                execSQL("DROP TABLE offer_outcomes")
+                execSQL("DROP TABLE trip_timings")
+                version = 1
+            }
+            v.close()
+        }
+        val migrated = Room.databaseBuilder(context, AppDatabase::class.java, name)
+            .addMigrations(*AppDatabase.MIGRATIONS)
+            .allowMainThreadQueries()
+            .build()
+        // Abrir valida o esquema migrado contra as entidades (Room lança exceção se divergir).
+        assertEquals("Carro antigo", VehicleRepository(migrated.vehicleDao()).vehicles.first().single().name)
+        migrated.intelligenceDao().upsertOutcome(com.driverintelligence.data.local.OfferOutcomeEntity(1, "ACCEPTED", "MANUAL", 1))
+        assertEquals(1, migrated.intelligenceDao().observeOutcomes().first().size)
+        migrated.close()
+        context.deleteDatabase(name)
     }
 }

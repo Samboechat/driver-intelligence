@@ -1,6 +1,8 @@
 package com.driverintelligence.domain.model
 
 import com.driverintelligence.domain.analytics.TripRecord
+import com.driverintelligence.domain.detection.OfferOutcome
+import com.driverintelligence.domain.detection.OutcomeSource
 import com.driverintelligence.domain.financial.DecisionEngine
 import com.driverintelligence.domain.financial.FinancialEngine
 import com.driverintelligence.domain.recognition.AnalysisContext
@@ -118,6 +120,8 @@ data class AnalyzedOffer(
     val destination: String?,
     val surge: Double?,
     val registeredTripId: Long? = null,
+    val outcome: OfferOutcome? = null,
+    val outcomeSource: OutcomeSource? = null,
 ) {
     val isRegistered: Boolean get() = registeredTripId != null
 
@@ -156,4 +160,21 @@ data class AnalyzedOffer(
             )
         }
     }
+}
+
+/** Tempos prometidos × reais de uma corrida acompanhada pelo assistente. */
+data class TripTiming(
+    val tripId: Long,
+    val acceptedAt: Long,
+    val arrivedAt: Long?,
+    val startedAt: Long?,
+    val completedAt: Long?,
+    val offeredPickupMin: Double?,
+    val offeredTripMin: Double?,
+    val actualPickupMin: Double?,
+    val actualTripMin: Double?,
+    val autoDetected: Boolean,
+) {
+    val offeredTotal: Double? get() = if (offeredPickupMin != null && offeredTripMin != null) offeredPickupMin + offeredTripMin else null
+    val actualTotal: Double? get() = if (actualPickupMin != null && actualTripMin != null) actualPickupMin + actualTripMin else null
 }

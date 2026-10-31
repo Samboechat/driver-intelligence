@@ -133,3 +133,27 @@ data class WorkSessionEntity(
     /** Atualizado periodicamente enquanto a sessão está ativa. */
     val endedAt: Long,
 )
+
+/** O que o motorista fez com uma oferta analisada (v2). */
+@Entity(tableName = "offer_outcomes")
+data class OfferOutcomeEntity(
+    @PrimaryKey val offerId: Long,
+    val outcome: String,
+    val source: String,
+    val decidedAt: Long,
+)
+
+/** Tempos prometidos × tempos reais de uma corrida acompanhada (v2). */
+@Entity(tableName = "trip_timings")
+data class TripTimingEntity(
+    @PrimaryKey val tripId: Long,
+    val acceptedAt: Long,
+    val arrivedAt: Long?,
+    val startedAt: Long?,
+    val completedAt: Long?,
+    val offeredPickupMin: Double?,
+    val offeredTripMin: Double?,
+    val actualPickupMin: Double?,
+    val actualTripMin: Double?,
+    val autoDetected: Boolean,
+)

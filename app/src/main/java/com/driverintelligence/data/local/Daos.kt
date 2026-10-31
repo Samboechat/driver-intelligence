@@ -134,3 +134,24 @@ interface SessionDao {
     @Query("SELECT * FROM work_sessions ORDER BY startedAt DESC")
     fun observeAll(): Flow<List<WorkSessionEntity>>
 }
+
+@Dao
+interface IntelligenceDao {
+    @Query("SELECT * FROM offer_outcomes")
+    fun observeOutcomes(): Flow<List<OfferOutcomeEntity>>
+
+    @androidx.room.Upsert
+    suspend fun upsertOutcome(outcome: OfferOutcomeEntity)
+
+    @Query("SELECT * FROM trip_timings ORDER BY acceptedAt DESC")
+    fun observeTimings(): Flow<List<TripTimingEntity>>
+
+    @androidx.room.Upsert
+    suspend fun upsertTiming(timing: TripTimingEntity)
+
+    @Query("DELETE FROM trip_timings WHERE tripId = :tripId")
+    suspend fun deleteTiming(tripId: Long)
+
+    @Query("DELETE FROM offer_outcomes WHERE offerId = :offerId")
+    suspend fun deleteOutcome(offerId: Long)
+}
