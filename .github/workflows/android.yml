@@ -34,11 +34,23 @@ jobs:
         with:
           gradle-version: "8.14.3"
 
-      - name: Testes unitários (motor financeiro, OCR parser, estados, banco)
-        run: gradle testDebugUnitTest --stacktrace
+      - name: Compilar, testar e gerar APK debug
+        run: |
+          set -o pipefail
+          gradle assembleDebug testDebugUnitTest --continue 2>&1 | tee build.log
 
-      - name: APK debug
-        run: gradle assembleDebug --stacktrace
+      - name: Resumo de erros (anotações)
+        if: failure()
+        run: |
+          grep -E "^e: |error:|What went wrong|^> |FAILED|Could not|Execution failed|tests completed|Test.*FAILED|Exception" build.log \
+            | grep -v "^\s*at " | head -400 > errors.txt || true
+          python3 - <<'PY'
+          lines = [l.rstrip() for l in open('errors.txt', encoding='utf-8', errors='replace')]
+          chunk = 40
+          for i in range(0, min(len(lines), chunk * 10), chunk):
+              msg = '\n'.join(lines[i:i+chunk]).replace('%', '%25').replace('\r', '').replace('\n', '%0A')
+              print(f"::error title=build-{i//chunk}::{msg}")
+          PY
 
       - name: Keystore de release (opcional, via secrets)
         if: ${{ env.HAS_KEYSTORE == 'true' }}
