@@ -16,6 +16,10 @@ data class OverlayPrefs(
     val relX: Float = 0.03f,
     val relY: Float = 0.10f,
     val haptics: Boolean = true,
+    /** Escala do overlay inteiro (texto e tamanho): 1,0 normal · 1,15 grande · 1,3 extra. */
+    val textScale: Float = 1f,
+    /** Mostra o faturamento do dia e a meta no rodapé do overlay. */
+    val showDailyProgress: Boolean = true,
 )
 
 data class CapturePrefs(

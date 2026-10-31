@@ -1,6 +1,8 @@
 package com.driverintelligence.domain.recognition
 
 import com.driverintelligence.domain.financial.DecisionEngine
+import com.driverintelligence.domain.financial.FareAdvisor
+import com.driverintelligence.domain.financial.FareTarget
 import com.driverintelligence.domain.financial.FinancialEngine
 import com.driverintelligence.domain.model.CostProfile
 import com.driverintelligence.domain.model.DataSource
@@ -32,6 +34,8 @@ data class OfferAnalysis(
     val confidence: Double,
     /** Identificador estável da oferta, ou nulo quando dados essenciais faltam. */
     val fingerprint: String?,
+    /** Valor mínimo que cumpriria todas as metas do motorista. */
+    val fareTarget: FareTarget? = null,
 )
 
 data class FrameAnalysis(
@@ -80,6 +84,7 @@ class OfferAnalyzer(
             decision = dec,
             confidence = confidence,
             fingerprint = fingerprint(offer),
+            fareTarget = if (validation.status == ValidationStatus.INVALID) null else FareAdvisor.target(fin, ctx.goals),
         )
     }
 

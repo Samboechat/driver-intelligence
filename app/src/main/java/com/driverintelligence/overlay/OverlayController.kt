@@ -25,9 +25,14 @@ import kotlinx.coroutines.flow.update
 
 enum class OverlayKind { WAITING, READING, OFFER, PAUSED, CAPTURE_STOPPED, BLOCKED, ERROR }
 
+/** Resumo do dia exibido no rodapé do overlay. */
+data class TodayStrip(val revenue: Double, val goal: Double?, val trips: Int, val profit: Double?)
+
 data class OverlayUiState(
     val mode: OverlayMode = OverlayMode.COMPACT,
     val opacity: Float = 0.94f,
+    val textScale: Float = 1f,
+    val today: TodayStrip? = null,
     val kind: OverlayKind = OverlayKind.WAITING,
     val analysis: OfferAnalysis? = null,
     val message: String? = null,
@@ -63,7 +68,7 @@ class OverlayController(
 ) {
     private val wm = windowContext.getSystemService(WindowManager::class.java)
     private val owner = OverlayLifecycleOwner()
-    private val _state = MutableStateFlow(OverlayUiState(mode = initial.mode, opacity = initial.opacity))
+    private val _state = MutableStateFlow(OverlayUiState(mode = initial.mode, opacity = initial.opacity, textScale = initial.textScale))
     val state: StateFlow<OverlayUiState> = _state.asStateFlow()
 
     private var prefs = initial
@@ -176,6 +181,14 @@ class OverlayController(
     }
 
     fun markRegistered() = _state.update { it.copy(offerRegistered = true) }
+
+    fun updateToday(today: TodayStrip?) = _state.update { it.copy(today = today) }
+
+    /** Aplica mudanças feitas nos Ajustes enquanto o assistente está ativo. */
+    fun applyPrefs(p: OverlayPrefs) {
+        prefs = prefs.copy(opacity = p.opacity, textScale = p.textScale, haptics = p.haptics, showDailyProgress = p.showDailyProgress)
+        _state.update { it.copy(opacity = p.opacity, textScale = p.textScale) }
+    }
 
     // ---- Janela ----
 

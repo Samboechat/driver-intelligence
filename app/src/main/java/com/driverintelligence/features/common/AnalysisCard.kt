@@ -46,6 +46,31 @@ fun AnalysisCard(a: OfferAnalysis, modifier: Modifier = Modifier, showScores: Bo
         }
         Spacer(Modifier.height(8.dp))
         Text(d.headline, style = MaterialTheme.typography.bodyMedium, color = if (d.classification == Classification.GRAY) c.textSecondary else color)
+        a.fareTarget?.let { t ->
+            val gap = t.gap ?: 0.0
+            Spacer(Modifier.height(10.dp))
+            Column(
+                Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp))
+                    .background(if (gap >= 0) c.positiveSoft else c.warningSoft)
+                    .padding(horizontal = 12.dp, vertical = 10.dp),
+            ) {
+                Text("VALOR MÍNIMO PARA SUAS METAS", style = MaterialTheme.typography.labelSmall, color = c.textTertiary)
+                Row(verticalAlignment = Alignment.Bottom) {
+                    Text(Br.money(t.minimumFare), style = DiNumbers.medium, color = c.textPrimary)
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        if (gap >= 0) "oferta ${Br.money(gap)} acima" else "faltam ${Br.money(-gap)}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (gap >= 0) c.positive else c.warning,
+                    )
+                }
+                Text(
+                    "Definido pela meta de ${t.bindingGoal}" + (t.breakEven?.let { " · lucro zero em ${Br.money(it)}" } ?: ""),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = c.textSecondary,
+                )
+            }
+        }
         d.score?.let { s ->
             Spacer(Modifier.height(10.dp))
             LinearMeter(s.toFloat(), color = color)

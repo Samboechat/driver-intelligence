@@ -36,6 +36,9 @@ import com.driverintelligence.domain.recognition.OfferAnalysis
 import com.driverintelligence.domain.recognition.OfferAnalyzer
 import com.driverintelligence.overlay.OverlayCallbacks
 import com.driverintelligence.overlay.OverlayController
+import com.driverintelligence.overlay.TodayStrip
+import java.time.LocalDate
+import java.time.ZoneId
 import com.driverintelligence.recognition.ImagePreprocessor
 import com.driverintelligence.recognition.OcrEngine
 import dagger.hilt.android.AndroidEntryPoint
@@ -46,6 +49,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -79,6 +83,7 @@ class CaptureService : LifecycleService() {
     private val preprocessor = ImagePreprocessor()
     private var loopJob: Job? = null
     private var heartbeatJob: Job? = null
+    private var todayJob: Job? = null
 
     private val machine = OfferStateMachine()
     private var detection = DetectionState()
@@ -98,7 +103,12 @@ class CaptureService : LifecycleService() {
     override fun onCreate() {
         super.onCreate()
         windowCtx = ScreenCaptureEngine.windowContext(this)
-        lifecycleScope.launch { settingsRepository.settings.collect { settings.value = it } }
+        lifecycleScope.launch {
+            settingsRepository.settings.collect {
+                settings.value = it
+                overlay?.applyPrefs(it.overlay)
+            }
+        }
         lifecycleScope.launch { contextProvider.context.collect { analysisContext.value = it } }
     }
 
@@ -189,6 +199,7 @@ class CaptureService : LifecycleService() {
 
         ensureOverlay()
         overlay?.showWaiting()
+        observeToday()
         startSession()
         startLoop()
         controller.update {
@@ -408,6 +419,8 @@ class CaptureService : LifecycleService() {
         loopJob = null
         heartbeatJob?.cancel()
         heartbeatJob = null
+        todayJob?.cancel()
+        todayJob = null
         engine?.release(stopProjection)
         engine = null
         ocr?.close()
@@ -426,6 +439,29 @@ class CaptureService : LifecycleService() {
         controller.update { it.copy(status = AssistantStatus.STOPPED, phase = OfferPhase.IDLE, lastAnalysis = null) }
         ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
         stopSelf()
+    }
+
+    /** Faturamento do dia (corridas registradas) para o rodapé do overlay. */
+    private fun observeToday() {
+        todayJob?.cancel()
+        val zone = ZoneId.systemDefault()
+        val start = LocalDate.now(zone).atStartOfDay(zone).toInstant().toEpochMilli()
+        val end = LocalDate.now(zone).plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli()
+        todayJob = lifecycleScope.launch {
+            combine(tripRepository.tripsBetween(start, end), settingsRepository.settings) { trips, s ->
+                if (!s.overlay.showDailyProgress) {
+                    null
+                } else {
+                    val profits = trips.mapNotNull { it.estimatedProfit }
+                    TodayStrip(
+                        revenue = trips.sumOf { it.fare },
+                        goal = s.goals.dailyRevenue,
+                        trips = trips.size,
+                        profit = if (profits.isEmpty()) null else profits.sum(),
+                    )
+                }
+            }.collect { overlay?.updateToday(it) }
+        }
     }
 
     private fun startSession() {

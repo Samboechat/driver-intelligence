@@ -121,7 +121,18 @@ fun SettingsScreen(
                     valueRange = 0.5f..1f,
                     colors = SliderDefaults.colors(thumbColor = c.brand, activeTrackColor = c.brand),
                 )
+                Spacer(Modifier.height(4.dp))
+                Text("Tamanho da janela e do texto", style = MaterialTheme.typography.labelMedium, color = c.textSecondary)
+                Spacer(Modifier.height(6.dp))
+                SegmentedSelector(
+                    TEXT_SCALES,
+                    TEXT_SCALES.minByOrNull { kotlin.math.abs(it - o.textScale) } ?: 1f,
+                    { scaleLabel(it) },
+                    { v -> vm.updateOverlay { it.copy(textScale = v) } },
+                )
+                Spacer(Modifier.height(6.dp))
                 SwitchRow("Vibração ao reconhecer oferta", o.haptics) { v -> vm.updateOverlay { it.copy(haptics = v) } }
+                SwitchRow("Mostrar meta do dia no rodapé", o.showDailyProgress) { v -> vm.updateOverlay { it.copy(showDailyProgress = v) } }
                 NavRow("Restaurar posição da janela", "Volta para o canto superior esquerdo", { vm.updateOverlay { it.copy(relX = 0.03f, relY = 0.10f) } })
             }
         }
@@ -183,6 +194,14 @@ fun SettingsScreen(
             )
         }
     }
+}
+
+private val TEXT_SCALES = listOf(1f, 1.15f, 1.3f)
+
+private fun scaleLabel(v: Float) = when {
+    v < 1.07f -> "Normal"
+    v < 1.22f -> "Grande"
+    else -> "Extra grande"
 }
 
 private fun modeLabel(m: OverlayMode) = when (m) {

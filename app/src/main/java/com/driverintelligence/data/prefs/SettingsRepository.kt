@@ -73,6 +73,8 @@ class SettingsRepository @Inject constructor(@ApplicationContext private val con
         val overlayRelX = floatPreferencesKey("overlay_rel_x")
         val overlayRelY = floatPreferencesKey("overlay_rel_y")
         val overlayHaptics = booleanPreferencesKey("overlay_haptics")
+        val overlayTextScale = floatPreferencesKey("overlay_text_scale")
+        val overlayDailyProgress = booleanPreferencesKey("overlay_daily_progress")
 
         val captureActiveMs = longPreferencesKey("capture_active_ms")
         val captureIdleMs = longPreferencesKey("capture_idle_ms")
@@ -144,6 +146,8 @@ class SettingsRepository @Inject constructor(@ApplicationContext private val con
         p[K.overlayRelX] = next.relX.coerceIn(0f, 1f)
         p[K.overlayRelY] = next.relY.coerceIn(0f, 1f)
         p[K.overlayHaptics] = next.haptics
+        p[K.overlayTextScale] = next.textScale.coerceIn(0.85f, 1.4f)
+        p[K.overlayDailyProgress] = next.showDailyProgress
     }
 
     suspend fun updateCapture(transform: (CapturePrefs) -> CapturePrefs) = edit { p ->
@@ -175,6 +179,8 @@ class SettingsRepository @Inject constructor(@ApplicationContext private val con
             relX = this[K.overlayRelX] ?: d.relX,
             relY = this[K.overlayRelY] ?: d.relY,
             haptics = this[K.overlayHaptics] ?: d.haptics,
+            textScale = this[K.overlayTextScale] ?: d.textScale,
+            showDailyProgress = this[K.overlayDailyProgress] ?: d.showDailyProgress,
         )
     }
 
