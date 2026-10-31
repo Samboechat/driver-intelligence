@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Marca: velocímetro estilizado — arco de leitura com ponteiro na zona positiva. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Arco de fundo -->
+    <path
+        android:pathData="M34,66 A22,22 0 1,1 74,66"
+        android:strokeWidth="6"
+        android:strokeColor="#33FFFFFF"
+        android:strokeLineCap="round"
+        android:fillColor="#00000000" />
+    <!-- Arco ativo -->
+    <path
+        android:pathData="M34,66 A22,22 0 0,1 54,32"
+        android:strokeWidth="6"
+        android:strokeColor="@color/di_brand"
+        android:strokeLineCap="round"
+        android:fillColor="#00000000" />
+    <path
+        android:pathData="M54,32 A22,22 0 0,1 72,43"
+        android:strokeWidth="6"
+        android:strokeColor="@color/di_positive"
+        android:strokeLineCap="round"
+        android:fillColor="#00000000" />
+    <!-- Ponteiro -->
+    <path
+        android:pathData="M52.2,56.4 L67,42 L55.8,59.6 Z"
+        android:fillColor="#FFFFFFFF" />
+    <path
+        android:pathData="M54,58 m-4,0 a4,4 0 1,0 8,0 a4,4 0 1,0 -8,0"
+        android:fillColor="#FFFFFFFF" />
+</vector>

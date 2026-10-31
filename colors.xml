@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="di_background">#FF0A0C0F</color>
+    <color name="di_brand">#FF8FA2FF</color>
+    <color name="di_icon_bg">#FF0F1319</color>
+    <color name="di_positive">#FF2FD180</color>
+</resources>

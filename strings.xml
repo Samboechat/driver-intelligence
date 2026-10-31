@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Driver Intelligence</string>
+    <string name="notification_channel_capture">Assistente de ofertas</string>
+    <string name="notification_channel_capture_desc">Mantém a leitura das ofertas ativa enquanto você dirige.</string>
+    <string name="notification_title_running">Assistente ativo</string>
+    <string name="notification_title_paused">Análise pausada</string>
+    <string name="notification_text">Lendo ofertas na tela. Nada é enviado para fora do aparelho.</string>
+    <string name="action_pause">Pausar</string>
+    <string name="action_resume">Retomar</string>
+    <string name="action_stop">Encerrar</string>
+</resources>
