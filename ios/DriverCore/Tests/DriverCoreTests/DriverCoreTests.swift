@@ -140,6 +140,115 @@ final class ParserTests: XCTestCase {
         XCTAssertFalse(parse("Você está online\nProcurando viagens\nR$ 152,30").isOfferScreen)
     }
 
+    // MARK: Falsos chamados
+
+    func testNavegacaoEGanhosNaoSaoChamado() {
+        // Corrida em andamento: valor na tela + distância da próxima manobra.
+        XCTAssertFalse(parse("R$ 18,50\nEm 300 m vire à direita\nAv. Itavuvu\n12 min\n5,4 km").isOfferScreen)
+        // Um valor e uma distância soltos não bastam.
+        XCTAssertFalse(parse("Ganhos de hoje\nR$ 152,30\n8,9 km").isOfferScreen)
+        // Só um par (indo buscar o passageiro).
+        XCTAssertFalse(parse("Buscar Maria\n4 min (1,2 km)\nR$ 18,50").isOfferScreen)
+        // Valor + dois pares sem nenhuma âncora do cartão.
+        XCTAssertFalse(parse("R$ 18,50\n4 min (1,2 km)\n20 min (9,3 km)").isOfferScreen)
+    }
+
+    func testNossaNotificacaoNaoViraChamado() {
+        let a = OfferAnalyzer().analyze(offer: OfferData(fare: 19.2, pickupDistanceKm: 1.2, tripDistanceKm: 7.7, pickupTimeMin: 4, tripTimeMin: 20,
+                                                         category: "Comfort", destination: "Éden, Sorocaba", passengerRating: 4.9),
+                                        context: AnalysisContext(matrix: MatrixConfig()))
+        let c = NotificationFormatter.format(a, goals: Goals())
+        let banner = [c.title, c.subtitle, c.body].joined(separator: "\n")
+        XCTAssertFalse(parse(banner).isOfferScreen, banner)
+        XCTAssertFalse(parse(banner).nearMiss, banner)
+        // Formato antigo (ainda pode estar na Central de Notificações).
+        XCTAssertFalse(parse("🟢R$ 19,20  🟢2,16/km  🟢48/h\nACEITAR · Lucro: R$ 14,75 (77%)\nUberX 24 min (8,9 km) · busca 1,2 km").isOfferScreen)
+    }
+
+    func testNotificacaoPorCimaDoCartaoNaoAtrapalha() {
+        // Faixa da notificação no topo + cartão do Uber embaixo: lê só o cartão.
+        func line(_ t: String, _ top: Int, _ h: Int = 50) -> OcrLine { OcrLine(t, box: Box(left: 60, top: top, right: 1000, bottom: top + h)) }
+        let f = OcrFrame(lines: [
+            line("O RECUSAR • R$ 9,80", 150),
+            line("R$ 1,10/km • R$ 31/h • UberX", 205),
+            line("X Km baixo: 1,10 • mínimo 1,85", 260),
+            line("Lucro R$ 5,35 • Total 8,9 km em 24 min", 315),
+            line("Comfort", 1100),
+            line("R$ 23,40", 1180, 110),
+            line("★ 4,95", 1320),
+            line("5 min (1.8 km) de distância", 1420),
+            line("Rua Aparecida, 300 - Jardim Santa Rosália", 1480),
+            line("Viagem de 14 min (7.2 km)", 1600),
+            line("Av. Gisele Constantino, 1850 - Parque", 1660),
+            line("Campolim, Sorocaba - SP", 1715),
+            line("Aceitar", 2300, 70),
+        ], width: 1206, height: 2622)
+        let r = parser.parse(f)
+        XCTAssertTrue(r.isOfferScreen)
+        XCTAssertEqual(r.offer.fare, 23.4)
+        XCTAssertEqual(r.offer.pickupDistanceKm, 1.8)
+        XCTAssertEqual(r.offer.tripDistanceKm, 7.2)
+        XCTAssertEqual(r.offer.category, "Comfort")
+        XCTAssertEqual(r.offer.passengerRating, 4.95)
+        XCTAssertEqual(r.offer.destination, "Av. Gisele Constantino, 1850 - Parque\nCampolim, Sorocaba - SP")
+        XCTAssertEqual(SorocabaZone.classify(r.offer.destination).kind, .hot)
+        XCTAssertEqual(r.confidence, 1, accuracy: 1e-9)
+    }
+
+    func testProprioAppNaoEChamado() {
+        let r = parse("Driver Intelligence\nÚltimo chamado\nUberX\nR$ 19,20\n4 min (1,2 km) de distância\nViagem: 20 min (7,7 km)\nInício\nPainel\nHistórico\nAjustes")
+        XCTAssertFalse(r.isOfferScreen)
+        XCTAssertTrue(r.ownApp)
+    }
+
+    func testRadarComVariasViagensNaoEChamado() {
+        let r = parse("Radar de viagens\nUberX\nR$ 12,00\n4 min (1,2 km) de distância\nViagem de 10 min (4 km)\nComfort\nR$ 22,00\n6 min (2 km) de distância\nViagem de 18 min (9 km)\nUberX\nR$ 9,50\n3 min (1 km) de distância\nViagem de 8 min (3 km)")
+        XCTAssertFalse(r.isOfferScreen)
+    }
+
+    // MARK: Leituras difíceis
+
+    func testCartaoLidoPelaMetadeEQuaseChamado() {
+        let r = parse("UberX\nR$ 18,50\n4 min (1,2 km) de distância\nRua das Flores\nAceitar")
+        XCTAssertFalse(r.isOfferScreen)
+        XCTAssertTrue(r.nearMiss)
+    }
+
+    func testCifraoSeparadoDoValor() {
+        func line(_ t: String, _ left: Int, _ top: Int, _ h: Int = 50) -> OcrLine { OcrLine(t, box: Box(left: left, top: top, right: left + 400, bottom: top + h)) }
+        let f = OcrFrame(lines: [
+            line("99Pop", 60, 1000),
+            line("12,40", 700, 990, 90),
+            line("3 min (1,1 km)", 60, 1200),
+            line("Rua A, Centro", 60, 1260),
+            line("18 min (9,2 km)", 60, 1400),
+            line("Rua B, Éden, Sorocaba", 60, 1460),
+            line("Aceitar", 400, 2200, 70),
+        ], width: 1206, height: 2622)
+        let r = parser.parse(f)
+        XCTAssertTrue(r.isOfferScreen)
+        XCTAssertEqual(r.offer.fare, 12.4)
+        XCTAssertEqual(r.offer.category, "99Pop")
+        XCTAssertEqual(r.offer.destination, "Rua B, Éden, Sorocaba")
+        XCTAssertLessThan(r.confidence, 0.85)
+    }
+
+    func testEnderecoEmDuasLinhasComCidade() {
+        let r = parse("Comfort\nR$ 140,00\n5 min (2 km) de distância\nRua X, Campolim\nViagem de 40 min (38 km)\nRua das Flores, 120 - Centro,\nItu - SP, 13300-000\nAceitar")
+        XCTAssertEqual(r.offer.origin, "Rua X, Campolim")
+        XCTAssertEqual(SorocabaZone.classify(r.offer.destination).name, "Itu")
+        XCTAssertEqual(SorocabaZone.classify("Praça da Sé - Sé, São\nPaulo - SP").name, "SP Capital")
+        XCTAssertEqual(SorocabaZone.classify("Av. São Paulo, 500\nAlém Ponte").kind, .neutral)
+    }
+
+    func testFormatoComViagemNoFim() {
+        let r = parse("UberX\nR$ 14,52\n★ 4,95\n7 minutos (2.4 km) de distância\nAv. Itavuvu, 1000\n15 minutos (8.1 km) de viagem\nRua Y, Centro\nAceitar")
+        XCTAssertTrue(r.isOfferScreen)
+        XCTAssertEqual(r.offer.pickupTimeMin, 7)
+        XCTAssertEqual(r.offer.tripDistanceKm, 8.1)
+        XCTAssertFalse(r.orderInferred)
+    }
+
     func testConfusoesDeOcr() {
         let r = parse("R$ 1O,5O\n4 min (l,2 km) de distância\nViagem: 20 min (9,3 km)")
         XCTAssertEqual(r.offer.fare, 10.5)
@@ -154,16 +263,16 @@ final class NotificationTests: XCTestCase {
     func testFormatoDaNotificacao() {
         let a = OfferAnalyzer().analyze(frame: .fromText("UberX\nR$ 19,20\n4 min (1,2 km) de distância\nViagem: 20 min (7,7 km)"), context: ctx)!
         let c = NotificationFormatter.format(a, goals: ctx.goals)
-        XCTAssertEqual(c.title, "🟢R$ 19,20  🟢2,16/km  🟢48/h")
-        XCTAssertTrue(c.body.hasPrefix("RENTÁVEL · Lucro: R$ 14,18 (74%)"), c.body)
-        XCTAssertTrue(c.body.contains("UberX 24 min (8,9 km) · busca 1,2 km"), c.body)
+        XCTAssertEqual(c.title, "🟢 RENTÁVEL · R$ 19,20")
+        XCTAssertEqual(c.subtitle, "R$ 2,16/km · R$ 48/h · UberX")
+        XCTAssertEqual(c.body, "Lucro R$ 14,18 · Total 8,9 km em 24 min")
     }
 
     func testTempoRealistaNaNotificacao() {
         var c2 = ctx
         c2.useRealisticTime = true
         let a = OfferAnalyzer().analyze(frame: .fromText("R$ 19,20\n4 min (1,2 km) de distância\nViagem: 20 min (7,7 km)"), context: c2)!
-        XCTAssertTrue(NotificationFormatter.format(a, goals: c2.goals).body.contains("24 min → ~28 min real"))
+        XCTAssertTrue(NotificationFormatter.format(a, goals: c2.goals).body.contains("Total 8,9 km em ~28 min"))
     }
 
     func testPortaoNaoRepeteEConfirmaLeituraFraca() {

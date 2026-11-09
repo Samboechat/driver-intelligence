@@ -101,14 +101,19 @@ struct OfferRow: View {
     var record: OfferRecord
     var body: some View {
         HStack(spacing: 12) {
-            RoundedRectangle(cornerRadius: 2).fill(record.cls.color).frame(width: 4, height: 38)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(Br.money(record.fare)).font(.headline.monospacedDigit())
-                Text([record.category, Br.km(record.totalKm), Br.minutes(record.realisticMin ?? record.totalMin)].compactMap { $0 }.joined(separator: " · "))
-                    .font(.caption).foregroundStyle(.secondary)
+            RoundedRectangle(cornerRadius: 2).fill(record.cls.color).frame(width: 4, height: 42)
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 8) {
+                    Text(record.verdict ?? record.cls.shortLabel)
+                        .font(.caption.weight(.heavy)).foregroundStyle(record.cls.color)
+                    Text(Br.money(record.fare)).font(.headline.monospacedDigit())
+                }
+                Text(record.reasons?.first
+                     ?? [record.category, Br.km(record.totalKm), Br.minutes(record.realisticMin ?? record.totalMin)].compactMap { $0 }.joined(separator: " · "))
+                    .font(.caption).foregroundStyle(.secondary).lineLimit(1)
             }
             Spacer()
-            VStack(alignment: .trailing, spacing: 2) {
+            VStack(alignment: .trailing, spacing: 3) {
                 Text(record.revenuePerKm.map { "\(Br.decimal($0))/km" } ?? "—").font(.subheadline.monospacedDigit()).foregroundStyle(record.cls.color)
                 HStack(spacing: 4) {
                     if record.alert != nil { Image(systemName: "exclamationmark.triangle.fill").font(.caption2).foregroundStyle(Palette.warning) }

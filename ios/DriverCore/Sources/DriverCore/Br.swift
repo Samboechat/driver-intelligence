@@ -42,6 +42,13 @@ public enum Br {
         return m == 0 ? "\(h) h" : String(format: "%d h %02d min", h, m)
     }
 
+    /// Endereço lido em várias linhas → uma linha só.
+    public static func oneLine(_ s: String?) -> String? {
+        guard let s else { return nil }
+        let parts = s.components(separatedBy: "\n").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        return parts.isEmpty ? nil : parts.joined(separator: " ")
+    }
+
     public static func percent(_ f: Double?) -> String {
         guard let f, f.isFinite else { return dash }
         return "\(Int((f * 100).rounded()))%"

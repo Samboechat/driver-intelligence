@@ -170,7 +170,9 @@ public enum SorocabaZone {
     public static func classify(_ destination: String?, config: ZoneConfig = .sorocaba) -> ZoneMatch {
         guard let destination, !destination.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return .neutral }
         let whole = normalize(destination)
-        let segs = segments(destination)
+        // O endereço pode vir quebrado em linhas: testa os trechos por linha e também com as linhas emendadas.
+        var segs = segments(destination)
+        for seg in segments(destination.replacingOccurrences(of: "\n", with: " ")) where !segs.contains(seg) { segs.append(seg) }
 
         let isHome = config.homeCities.contains { home in segs.contains { segmentIsCity($0, home) } }
         if !isHome {

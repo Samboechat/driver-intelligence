@@ -103,7 +103,20 @@ struct HistoryView: View {
     @State private var history = SharedStore.history
     @State private var trips = SharedStore.trips
     @State private var mode = 0
+    @State private var filter = 0
     @State private var confirmClear = false
+    private let timer = Timer.publish(every: 4, on: .main, in: .common).autoconnect()
+
+    /// 0 = todos · 1 = aceitar · 2 = avaliar · 3 = recusar · 4 = os que eu aceitei
+    private var shown: [OfferRecord] {
+        switch filter {
+        case 1: return history.filter { $0.cls == .green }
+        case 2: return history.filter { $0.cls == .yellow }
+        case 3: return history.filter { $0.cls == .red }
+        case 4: return history.filter { $0.result == .accepted }
+        default: return history
+        }
+    }
 
     var body: some View {
         NavigationStack {
@@ -117,12 +130,30 @@ struct HistoryView: View {
 
                 if mode == 0 {
                     if history.isEmpty {
-                        Text("Os chamados lidos durante a transmissão aparecem aqui.").foregroundStyle(.secondary)
+                        Text("Cada chamado lido com a leitura ligada fica guardado aqui, com o veredito e o motivo.")
+                            .foregroundStyle(.secondary)
+                    } else {
+                        Picker("Filtro", selection: $filter) {
+                            Text("Todos").tag(0)
+                            Text("Aceitar").tag(1)
+                            Text("Avaliar").tag(2)
+                            Text("Recusar").tag(3)
+                            Text("Fiz").tag(4)
+                        }
+                        .pickerStyle(.segmented)
+                        .listRowBackground(Color.clear)
+                        if shown.isEmpty { Text("Nenhum chamado neste filtro.").foregroundStyle(.secondary) }
                     }
-                    ForEach(grouped(history, \.date), id: \.0) { day, items in
-                        Section(day) {
+                    ForEach(grouped(shown, \.date), id: \.0) { day, items in
+                        Section {
                             ForEach(items) { r in
                                 NavigationLink { CaptureDetail(record: r) } label: { OfferRow(record: r) }
+                            }
+                        } header: {
+                            HStack {
+                                Text(day)
+                                Spacer()
+                                Text("\(items.count) chamado(s)")
                             }
                         }
                     }
@@ -136,6 +167,7 @@ struct HistoryView: View {
                                 .onDelete { idx in
                                     let ids = idx.map { items[$0].id }
                                     trips.removeAll { ids.contains($0.id) }
+                                    SharedStore.deletedTrips += ids
                                     SharedStore.trips = trips
                                 }
                         } header: {
@@ -164,19 +196,30 @@ struct HistoryView: View {
                 }
             }
             .confirmationDialog("Apagar o histórico?", isPresented: $confirmClear, titleVisibility: .visible) {
-                Button("Apagar chamados", role: .destructive) { SharedStore.history = []; history = [] }
-                Button("Apagar corridas feitas", role: .destructive) { SharedStore.trips = []; trips = [] }
+                Button("Apagar chamados", role: .destructive) {
+                    SharedStore.historyClearedAt = Date()
+                    SharedStore.history = []
+                    history = []
+                }
+                Button("Apagar corridas feitas", role: .destructive) {
+                    SharedStore.tripsClearedAt = Date()
+                    SharedStore.trips = []
+                    trips = []
+                }
             } message: {
                 Text("Os prints já enviados ao app Fotos continuam no álbum.")
             }
-            .refreshable { reload() }
+            .refreshable { Bridge.pull { _ in DispatchQueue.main.async { reload() } } }
             .onAppear(perform: reload)
+            .onReceive(timer) { _ in reload() }
         }
     }
 
     private func reload() {
-        history = SharedStore.history
-        trips = SharedStore.trips
+        let h = SharedStore.history
+        let t = SharedStore.trips
+        if h != history { history = h }
+        if t != trips { trips = t }
     }
 
     private func csvFile() -> URL {
@@ -283,10 +326,21 @@ struct SettingsView: View {
                 }
                 Section {
                     Toggle("Som nas notificações", isOn: $s.notifySound)
+                    Toggle("Um som para cada veredito", isOn: $s.verdictSounds).disabled(!s.notifySound)
+                    Button("Enviar notificações de exemplo") { Notifier.sendTest(settings: s) }
+                } header: {
+                    Text("Notificações")
+                } footer: {
+                    Text("Com um som para cada veredito dá para saber se é aceitar, avaliar ou recusar sem olhar para a tela. O exemplo envia uma de aceitar e, em seguida, uma de recusar.")
+                }
+                Section {
                     Toggle("Avisar leituras incompletas", isOn: $s.notifyIncomplete)
                     Toggle("Leitura rápida (economiza bateria)", isOn: $s.fastRecognition)
+                    NavigationLink("Diagnóstico da leitura") { DiagnosticsView() }
                 } header: {
-                    Text("Notificações e leitura")
+                    Text("Leitura da tela")
+                } footer: {
+                    Text("Leitura rápida gasta menos bateria, mas erra mais números. Se algum chamado não for lido, o Diagnóstico mostra o que o app enxergou.")
                 }
                 Section {
                     Toggle("Salvar print de cada chamado", isOn: $s.saveScreenshots)
@@ -306,7 +360,10 @@ struct SettingsView: View {
                     Toggle("Detectar aceite e recusa", isOn: $s.autoTrack)
                     Toggle("Registrar corridas concluídas", isOn: $s.autoRegisterTrips)
                     Toggle("Resumo ao fim de cada corrida", isOn: $s.notifyTripSummary)
-                    Button("Recomeçar o aprendizado de tempo", role: .destructive) { SharedStore.samples = [] }
+                    Button("Recomeçar o aprendizado de tempo", role: .destructive) {
+                        SharedStore.samples = []
+                        Bridge.send(AppCommand(action: .resetLearning))
+                    }
                 } header: {
                     Text("Corridas")
                 } footer: {
@@ -322,6 +379,7 @@ struct SettingsView: View {
             .navigationTitle("Ajustes")
             .onChange(of: s) { new in
                 SharedStore.settings = new
+                Bridge.publishSettings(new)
                 if new.saveScreenshots, PhotoAlbum.notDetermined { Task { await Permissions.shared.requestPhotos() } }
             }
         }

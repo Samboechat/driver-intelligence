@@ -18,6 +18,8 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
         UNUserNotificationCenter.current().delegate = self
         Notifier.registerCategories()
+        // Deixa os ajustes atuais à mão para a leitura de tela (ver Bridge).
+        Bridge.publishSettings(SharedStore.settings)
         return true
     }
 
@@ -28,15 +30,20 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
 
     /// Botões "Aceitei" / "Finalizei" das notificações: repassa para a extensão.
     func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse) async {
-        let fp = response.notification.request.content.userInfo["fingerprint"] as? String
+        let info = response.notification.request.content.userInfo
+        let fp = info["fingerprint"] as? String
+        // A notificação carrega o chamado: guarda no histórico antes que ela suma da Central.
+        if let data = info["rec"] as? Data, let record = try? JSONDecoder().decode(OfferRecord.self, from: data) {
+            Bridge.merge(offers: [record])
+        }
         switch response.actionIdentifier {
         case Notifier.acceptAction:
-            SharedStore.command = AppCommand(action: .accept, fingerprint: (fp?.isEmpty ?? true) ? nil : fp)
+            Bridge.send(AppCommand(action: .accept, fingerprint: (fp?.isEmpty ?? true) ? nil : fp))
             if let fp, !fp.isEmpty { SharedStore.setOutcome(fingerprint: fp, .accepted) }
         case Notifier.finishAction:
-            SharedStore.command = AppCommand(action: .finish)
+            Bridge.send(AppCommand(action: .finish))
         case Notifier.resetAction:
-            SharedStore.command = AppCommand(action: .reset)
+            Bridge.send(AppCommand(action: .reset))
         default:
             break
         }
@@ -51,6 +58,7 @@ struct RootView: View {
     @State private var showPrints = SharedStore.settings.saveScreenshots
     private let photoTimer = Timer.publish(every: 20, on: .main, in: .common).autoconnect()
     private let liveTimer = Timer.publish(every: 3, on: .main, in: .common).autoconnect()
+    private let syncTimer = Timer.publish(every: 2, on: .main, in: .common).autoconnect()
     @State private var lastLiveState: RideActivityAttributes.ContentState?
 
     var body: some View {
@@ -74,18 +82,28 @@ struct RootView: View {
         .task {
             // Ao entrar no app: pede tudo o que ainda não foi decidido.
             await perms.requestAll()
+            sync()
             flushPhotos()
             syncLiveActivity()
         }
         .onChange(of: phase) { p in
             guard p == .active else { return }
             Task { await perms.refresh() }
+            Bridge.publishSettings(SharedStore.settings)
+            sync()
             flushPhotos()
             showPrints = SharedStore.settings.saveScreenshots
             syncLiveActivity()
         }
         .onReceive(photoTimer) { _ in flushPhotos() }
         .onReceive(liveTimer) { _ in if phase == .active { syncLiveActivity() } }
+        .onReceive(syncTimer) { _ in if phase == .active { sync() } }
+    }
+
+    /// Busca o que a leitura de tela publicou (estado da gravação, chamados, corridas).
+    private func sync() {
+        CaptureMonitor.shared.refresh()
+        Bridge.pull()
     }
 
     private func flushPhotos() {
@@ -98,7 +116,7 @@ struct RootView: View {
         guard #available(iOS 16.2, *) else { return }
         let settings = SharedStore.settings
         let status = SharedStore.status
-        let live = status.running && (status.lastFrameAt.map { Date().timeIntervalSince($0) < 30 } ?? true)
+        let live = ReadingState.current(status: status, capture: CaptureMonitor.shared) == .reading
         guard settings.liveActivity && live else {
             if LiveActivityController.isRunning { LiveActivityController.end() }
             lastLiveState = nil

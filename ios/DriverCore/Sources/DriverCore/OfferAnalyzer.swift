@@ -72,9 +72,14 @@ public struct OfferAnalyzer: Sendable {
 
     /// Texto da tela → análise, ou nil se não for uma tela de oferta.
     public func analyze(frame: OcrFrame, context: AnalysisContext) -> OfferAnalysis? {
+        read(frame: frame, context: context).analysis
+    }
+
+    /// Como `analyze(frame:)`, mas devolve também a leitura (para saber quando um cartão ficou pela metade).
+    public func read(frame: OcrFrame, context: AnalysisContext) -> (parse: ParseResult, analysis: OfferAnalysis?) {
         let p = parser.parse(frame)
-        guard p.isOfferScreen else { return nil }
-        return analyze(offer: p.offer, confidence: p.confidence, fromOcr: true, context: context)
+        guard p.isOfferScreen else { return (p, nil) }
+        return (p, analyze(offer: p.offer, confidence: p.confidence, fromOcr: true, context: context))
     }
 
     public func analyze(offer: OfferData, confidence: Double = 1, fromOcr: Bool = false, context ctx: AnalysisContext) -> OfferAnalysis {
@@ -190,63 +195,67 @@ public struct NotificationGate: Sendable {
 }
 
 /// Texto da notificação, no estilo de leitura rápida.
+/**
+ * Texto da notificação, pensado para ser lido de relance:
+ *  título     🟢 ACEITAR · R$ 19,20            (veredito e valor)
+ *  subtítulo  R$ 2,16/km · R$ 54/h · Comfort   (os dois números que decidem)
+ *  corpo      motivo (quando não é aceitar), resumo e alerta de zona
+ * O texto evita as palavras e formatos do cartão do Uber ("min (km)", "viagem", "distância"),
+ * para a leitura de tela nunca confundir a nossa notificação com um chamado.
+ */
 public enum NotificationFormatter {
     public struct Content: Equatable, Sendable {
         public var title: String
+        public var subtitle: String
         public var body: String
     }
 
-    /// `hourFloor`: piso por hora da matriz de aceite (quando ligada).
+    /// `hourFloor` fica por compatibilidade; o veredito já considera o piso por hora.
     public static func format(_ a: OfferAnalysis, goals: Goals, hourFloor: Double? = nil) -> Content {
         let f = a.financial
         let b = a.basis
         let d = a.decision
-        func dot(_ met: Bool?) -> String {
-            switch met {
-            case .some(true): return "🟢"
-            case .some(false): return "🔴"
-            case .none: return "⚪️"
-            }
-        }
         let mv = a.matrix
-        let kmOk = f.revenuePerKm.map { $0 >= (mv?.requiredPerKm ?? goals.minRevenuePerKm) }
-        let hourOk = b.revenuePerHour.map { $0 >= (mv != nil ? hourFloor ?? goals.minRevenuePerHour : goals.minRevenuePerHour) }
 
-        var title = "\(d.classification.dot)\(Br.money(f.grossRevenue))"
-        if let rk = f.revenuePerKm { title += "  \(dot(kmOk))\(Br.decimal(rk))/km" }
-        if let rh = b.revenuePerHour { title += "  \(dot(hourOk))\(Br.decimal(rh, 0))/h" }
-
-        var line1: [String] = [mv?.label ?? d.classification.shortLabel]
-        if let p = f.operatingProfit {
-            let margin = f.operatingMargin.map { " (\(Br.percent($0)))" } ?? ""
-            line1.append("Lucro: \(Br.money(p))\(margin)")
+        let verdict: String
+        switch d.classification {
+        case .gray: verdict = "CONFERIR"
+        default: verdict = mv?.label ?? d.classification.shortLabel
         }
-        if let t = a.fareTarget, d.classification != .gray, let gap = t.gap, gap < 0 {
-            line1.append("justo \(Br.money(t.minimumFare))")
-        }
+        let title = "\(d.classification.dot) \(verdict) · \(Br.money(f.grossRevenue))"
 
-        var line2: [String] = []
-        if let c = a.offer.category { line2.append(c) }
-        if let tm = f.totalTimeMin {
-            if let real = a.realistic?.totalTimeMin, abs(real - tm) >= 1 {
-                line2.append("\(Br.minutes(tm)) → ~\(Br.minutes(real)) real")
-            } else {
-                line2.append(Br.minutes(tm))
-            }
-        }
-        if let km = f.totalDistanceKm { line2.append("(\(Br.km(km)))") }
-        if let pk = a.offer.pickupDistanceKm { line2.append("· busca \(Br.km(pk))") }
+        var sub: [String] = []
+        if let rk = f.revenuePerKm { sub.append(Br.perKm(rk)) }
+        if let rh = b.revenuePerHour { sub.append("R$ \(Br.decimal(rh, 0))/h") }
+        if let c = a.offer.category { sub.append(c) }
 
-        var body = line1.joined(separator: " · ")
-        if !line2.isEmpty { body += "\n" + line2.joined(separator: " ") }
-        if d.classification == .gray || d.classification == .red || (mv != nil && d.classification == .yellow) { body += "\n" + d.headline }
+        var lines: [String] = []
         if let mv {
-            var extra: [String] = []
-            if let alert = mv.alert { extra.append("⚠️ \(alert)") }
-            if mv.zone.kind == .hot { extra.append("🔥 Zona quente") }
-            if let rating = a.offer.passengerRating { extra.append("★ \(Br.decimal(rating))") }
-            if !extra.isEmpty { body += "\n" + extra.joined(separator: " · ") }
+            switch d.classification {
+            case .red: lines += mv.shortRefusals.prefix(2).map { "✖︎ \($0)" }
+            case .yellow: lines += mv.shortCautions.prefix(2).map { "• \($0)" }
+            default: break
+            }
+        } else if d.classification != .green {
+            lines.append(d.headline)
         }
-        return Content(title: title, body: body)
+
+        var summary: [String] = []
+        if let p = f.operatingProfit { summary.append("Lucro \(Br.money(p))") }
+        if let km = f.totalDistanceKm {
+            var s = "Total \(Br.decimal(km, 1)) km"
+            if let real = a.realistic?.totalTimeMin { s += " em ~\(Br.minutes(real))" } else if let tm = f.totalTimeMin { s += " em \(Br.minutes(tm))" }
+            summary.append(s)
+        }
+        if !summary.isEmpty { lines.append(summary.joined(separator: " · ")) }
+
+        if let mv {
+            if let alert = mv.alert { lines.append("⚠️ \(alert)") }
+            if mv.zone.kind == .hot { lines.append("🔥 Zona quente\(mv.zone.name.map { ": \($0.capitalized)" } ?? "")") }
+        }
+        if d.classification != .gray, mv == nil, let t = a.fareTarget, let gap = t.gap, gap < 0 {
+            lines.append("Valor justo: \(Br.money(t.minimumFare))")
+        }
+        return Content(title: title, subtitle: sub.joined(separator: " · "), body: lines.joined(separator: "\n"))
     }
 }

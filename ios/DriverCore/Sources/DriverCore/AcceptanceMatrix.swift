@@ -96,6 +96,9 @@ public struct MatrixVerdict: Equatable, Sendable {
     public var requiredPerKm: Double
     public var refusals: [String]
     public var cautions: [String]
+    /// Mesmos motivos, em versão curta para a notificação.
+    public var shortRefusals: [String] = []
+    public var shortCautions: [String] = []
     public var alert: String?
     public var headline: String
 
@@ -142,6 +145,8 @@ public struct AcceptanceMatrix: Sendable {
 
         var refusals: [String] = []
         var cautions: [String] = []
+        var shortRefusals: [String] = []
+        var shortCautions: [String] = []
         var alert: String?
 
         // 1. Zona
@@ -149,11 +154,13 @@ public struct AcceptanceMatrix: Sendable {
         case .intercity:
             if let minFare = zone.minimumFare, fare < minFare - eps {
                 refusals.append("\(zone.name ?? "intermunicipal") exige \(Br.money(minFare)) (volta vazia); paga \(Br.money(fare))")
+                shortRefusals.append("\(zone.name ?? "Intermunicipal") paga \(Br.money(fare)) · mínimo \(Br.money(minFare))")
             }
             alert = "Intermunicipal: volta vazia"
         case .periphery:
             if perKm < m.zones.peripheryMinPerKm - eps {
                 refusals.append("periferia exige \(Br.perKm(m.zones.peripheryMinPerKm)); paga \(Br.perKm(perKm))")
+                shortRefusals.append("Periferia: \(Br.decimal(perKm)) por km · mínimo \(Br.decimal(m.zones.peripheryMinPerKm))")
             }
             alert = m.zones.peripheryAlert
         case .hot, .neutral:
@@ -164,27 +171,33 @@ public struct AcceptanceMatrix: Sendable {
         if !intercityOK {
             if perKm < rule.yellowPerKm - eps {
                 refusals.append("\(Br.perKm(perKm)) abaixo de \(Br.perKm(rule.yellowPerKm)) (\(cls.label))")
+                shortRefusals.append("Km baixo: \(Br.decimal(perKm)) · mínimo \(Br.decimal(rule.yellowPerKm))")
             } else if perKm < rule.acceptPerKm - eps {
                 cautions.append("\(Br.perKm(perKm)) na faixa amarela (\(cls.label) aceita a partir de \(Br.perKm(rule.acceptPerKm)))")
+                shortCautions.append("Km na faixa amarela: \(Br.decimal(perKm)) · ideal \(Br.decimal(rule.acceptPerKm))")
             }
         }
 
         // 3. Busca
         if pickupKm > pickupLimit + eps {
             refusals.append("busca de \(Br.km(pickupKm)) acima do limite de \(Br.km(pickupLimit))")
+            shortRefusals.append("Busca longa: \(Br.decimal(pickupKm, 1)) · máximo \(Br.decimal(pickupLimit, 1))")
         }
 
         // 4. Nota
         if let rating = offer.passengerRating, rating < rule.minRating - eps {
             refusals.append("nota \(Br.decimal(rating)) abaixo de \(Br.decimal(rule.minRating))")
+            shortRefusals.append("Nota baixa: \(Br.decimal(rating)) · mínimo \(Br.decimal(rule.minRating))")
         }
 
         // 5. Hora
         if let perHour = r.revenuePerHour {
             if perHour < m.hourFloor - eps {
                 refusals.append("\(Br.perHour(perHour)) abaixo do piso de \(Br.perHour(m.hourFloor))")
+                shortRefusals.append("Hora baixa: \(Br.decimal(perHour, 0)) · piso \(Br.decimal(m.hourFloor, 0))")
             } else if perHour < m.hourIdeal - eps {
                 cautions.append("\(Br.perHour(perHour)) abaixo do ideal de \(Br.perHour(m.hourIdeal))")
+                shortCautions.append("Hora abaixo do ideal: \(Br.decimal(perHour, 0)) · ideal \(Br.decimal(m.hourIdeal, 0))")
             }
         }
 
@@ -215,6 +228,7 @@ public struct AcceptanceMatrix: Sendable {
         let required = zone.kind == .periphery ? max(rule.acceptPerKm, m.zones.peripheryMinPerKm)
             : (zone.kind == .hot ? rule.yellowPerKm : rule.acceptPerKm)
         return MatrixVerdict(classification: classification, rideClass: cls, zone: zone, pickupLimitKm: pickupLimit,
-                             requiredPerKm: required, refusals: refusals, cautions: cautions, alert: alert, headline: headline)
+                             requiredPerKm: required, refusals: refusals, cautions: cautions,
+                             shortRefusals: shortRefusals, shortCautions: shortCautions, alert: alert, headline: headline)
     }
 }

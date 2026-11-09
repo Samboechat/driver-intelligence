@@ -6,6 +6,8 @@ struct OnboardingView: View {
     var done: () -> Void
     @State private var page = 0
     @State private var status = SharedStore.status
+    @ObservedObject private var capture = CaptureMonitor.shared
+    private var reading: Bool { ReadingState.current(status: status, capture: capture).isOn }
     private let timer = Timer.publish(every: 2, on: .main, in: .common).autoconnect()
 
     var body: some View {
@@ -93,8 +95,8 @@ struct OnboardingView: View {
         OnboardPage(icon: "record.circle", color: Palette.negative,
                     title: "Compartilhar a tela",
                     text: "Último passo: toque abaixo, escolha \"Driver Intelligence\" e \"Iniciar Transmissão\". O iOS pede essa confirmação toda vez que a leitura é ligada.\n\nTudo é processado no próprio iPhone; nada é enviado para a internet.") {
-            BroadcastButton(running: status.running)
-            if status.running {
+            BroadcastButton(running: reading)
+            if reading {
                 Done("Transmissão ativa")
                 PrimaryButton("Concluir", action: done)
             } else {

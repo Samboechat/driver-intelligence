@@ -34,6 +34,12 @@ public struct ParseResult: Equatable, Sendable {
     public var orderInferred: Bool
     public var fareAmbiguous: Bool
     public var ocrCorrections: Int
+    /// Parece um cartão de chamado (botão Aceitar ou rótulos), mas faltou ler valor ou distâncias.
+    public var nearMiss: Bool = false
+    /// A tela é do próprio Driver Intelligence (nunca é chamado).
+    public var ownApp: Bool = false
+    /// Texto que sobrou depois de tirar a nossa notificação (para diagnóstico).
+    public var cleanedText: String = ""
 }
 
 /// Normalização de números lidos por OCR (pt-BR e internacional).
@@ -91,7 +97,13 @@ public struct OfferTextParser: Sendable {
     public init() {}
 
     private enum Label { case pickup, trip, unlabeled }
-    private struct Pair { var minutes: Double?; var km: Double; var label: Label; var start: Int; var line: Int }
+    private struct Pair {
+        var minutes: Double?; var km: Double; var label: Label; var start: Int; var line: Int
+        var endLine: Int = 0
+        var meters = false
+        /// Par confiável: tem tempo e distância, ou veio com rótulo ("de distância", "viagem").
+        var strong: Bool { (minutes != nil || label != .unlabeled) && !(meters && minutes == nil) }
+    }
     private struct Money { var value: Double; var line: Int; var start: Int; var isPlus: Bool; var rate: String?; var isExtra: Bool }
 
     static func rx(_ p: String, _ ci: Bool = true) -> NSRegularExpression {
@@ -114,7 +126,70 @@ public struct OfferTextParser: Sendable {
     static let tripKeywords = ["viagem", "trip", "percurso", "corrida de"]
     static let pickupKeywords = ["de distancia", "distancia", "away", "embarque", "ate voce", "ate o passageiro", "pickup"]
     static let pickupSuffixLines = ["de distancia", "distancia", "away"]
-    static let acceptKeywords = ["aceitar", "accept", "toque para aceitar"]
+    static let acceptKeywords = ["aceitar", "accept", "toque para aceitar", "selecionar", "aceitar corrida", "aceitar viagem"]
+
+    // Nossa própria notificação e o nosso próprio app aparecem na tela gravada: nunca são chamado.
+    /// Título da notificação: "🟢 ACEITAR · R$ 19,20" (o emoji pode virar qualquer coisa no OCR).
+    static let ownTitle = rx(#"^.{0,4}(ACEITAR|AVALIAR|RECUSAR|CONFERIR|RENTÁVEL|MODERADA|ABAIXO DA META|INCOMPLETO)\b.{0,4}(R\s?[$S5]|Lucro)"#, false)
+    /// Linhas do corpo da notificação.
+    static let ownBody = rx(#"^.{0,3}(Busca \d|Lucro[: ]|Total \d|Motivo|Volta Vazia|Zona quente|Intermunicipal|Corrida aceita|Corrida conclu|Tempo real|Leitura encerrada)"#)
+    static let ownTabs: Set<String> = ["inicio", "painel", "historico", "ajustes", "prints"]
+    static let bareMoney = rx(#"^\s*(\d{1,3}[.,]\d{2})\s*$"#)
+
+    /// Tira da leitura as linhas da nossa notificação (e tudo na faixa da tela que ela ocupa).
+    static func dropOwnContent(_ frame: OcrFrame) -> (lines: [OcrLine], ownApp: Bool) {
+        func isOwnLine(_ t: String) -> Bool {
+            let u = t.uppercased()
+            if u.contains("DRIVER INTELLIGENCE") || u.hasPrefix("DI ·") { return true }
+            let n = t.lowercased()
+            if n.contains("/km") && n.contains("/h") { return true } // "R$ 2,16/km · R$ 54/h"
+            let r = NSRange(location: 0, length: (t as NSString).length)
+            return ownTitle.firstMatch(in: t, range: r) != nil
+        }
+        func isOwnBody(_ t: String) -> Bool {
+            ownBody.firstMatch(in: t, range: NSRange(location: 0, length: (t as NSString).length)) != nil
+        }
+        let tabs = frame.lines.filter { ownTabs.contains(normalize($0.text).trimmingCharacters(in: .whitespaces)) }.count
+        let ownApp = tabs >= 3
+
+        let geometry = frame.height > 0 && !frame.lines.isEmpty && frame.lines.allSatisfy { $0.box != nil }
+        var out: [OcrLine] = []
+        if geometry {
+            // Uma notificação ocupa até ~17% da altura da tela abaixo do título.
+            let bands: [ClosedRange<Int>] = frame.lines.filter { isOwnLine($0.text) }.map {
+                let top = $0.box!.top
+                return (top - frame.height / 50)...(top + frame.height * 17 / 100)
+            }
+            out = frame.lines.filter { l in
+                if isOwnLine(l.text) || isOwnBody(l.text) { return false }
+                return !bands.contains { $0.contains(l.box!.top) }
+            }
+        } else {
+            var inBanner = false
+            for l in frame.lines {
+                if isOwnLine(l.text) { inBanner = true; continue }
+                if isOwnBody(l.text) || (inBanner && l.text.hasPrefix("→")) { continue }
+                inBanner = false
+                out.append(l)
+            }
+        }
+        return (out, ownApp)
+    }
+
+    /// Ordena por linha visual (mesma altura = mesma linha, da esquerda para a direita).
+    static func rowSorted(_ lines: [OcrLine]) -> [OcrLine] {
+        guard !lines.isEmpty, lines.allSatisfy({ $0.box != nil }) else { return lines }
+        let byTop = lines.sorted { $0.box!.centerY < $1.box!.centerY }
+        var rows: [[OcrLine]] = []
+        for l in byTop {
+            if let first = rows.last?.first, abs(l.box!.centerY - first.box!.centerY) <= max(4, min(first.box!.height, l.box!.height) / 2) {
+                rows[rows.count - 1].append(l)
+            } else {
+                rows.append([l])
+            }
+        }
+        return rows.flatMap { $0.sorted { $0.box!.left < $1.box!.left } }
+    }
     static let rejectKeywords = ["recusar", "decline", "x"]
     static let extraKeywords = ["inclui", "incluido", "dinamic", "promo", "gorjeta", "bonus", "taxa", "surge", "boost", "includes", "adicional"]
 
@@ -124,13 +199,12 @@ public struct OfferTextParser: Sendable {
 
     public func parse(_ frame: OcrFrame) -> ParseResult {
         var corrections = 0
-        var raw = frame.lines.filter { l in
-            let u = l.text.uppercased()
-            return !(u.contains("DRIVER INTELLIGENCE") || u.hasPrefix("DI ·"))
+        let own = Self.dropOwnContent(frame)
+        if own.ownApp {
+            return ParseResult(offer: OfferData(), confidence: 0, isOfferScreen: false, orderInferred: false,
+                               fareAmbiguous: false, ocrCorrections: 0, nearMiss: false, ownApp: true, cleanedText: "")
         }
-        if !raw.isEmpty && raw.allSatisfy({ $0.box != nil }) {
-            raw.sort { ($0.box!.top, $0.box!.left) < ($1.box!.top, $1.box!.left) }
-        }
+        let raw = Self.rowSorted(own.lines)
         let lines: [OcrLine] = raw.map { l in
             let (fixed, n) = NumberNormalizer.fixDigitConfusions(l.text.replacingOccurrences(of: "\u{00A0}", with: " ").trimmingCharacters(in: .whitespaces))
             corrections += n
@@ -168,6 +242,8 @@ public struct OfferTextParser: Sendable {
             let alt = findPairs(ns, Self.pairReversed, reversed: true, lineOf: lineOf)
             if alt.contains(where: { $0.minutes != nil }) { pairs = alt }
         }
+        // Distância solta ("300 m" da navegação, "8,9 km" de um resumo) não é par de chamado.
+        pairs = pairs.filter(\.strong)
         var pickup = pairs.first { $0.label == .pickup }
         var trip = pairs.first { $0.label == .trip }
         let unlabeled = pairs.filter { $0.label == .unlabeled }
@@ -184,7 +260,33 @@ public struct OfferTextParser: Sendable {
         let extraPairs = max(0, pairs.count - [pickup, trip].compactMap { $0 }.count)
 
         // Valor da corrida
-        let candidates = monies.filter { !$0.isPlus && $0.rate == nil && !$0.isExtra }
+        var candidates = monies.filter { !$0.isPlus && $0.rate == nil && !$0.isExtra }
+        var fareFromBareNumber = false
+        if hasGeometry, let t = trip ?? pickup {
+            // O valor fica acima das distâncias, dentro do mesmo cartão.
+            let limitY = lines[t.line].box!.centerY
+            let span = Int(Double(frame.height > 0 ? frame.height : 2400) * 0.6)
+            let inCard = candidates.filter { let y = lines[$0.line].box!.centerY; return y <= limitY && limitY - y <= span }
+            if !inCard.isEmpty { candidates = inCard }
+        }
+        if candidates.isEmpty, pickup != nil || trip != nil {
+            // "R$" lido separado do número (fonte menor): aceita um número solto com centavos acima das distâncias.
+            let firstPairLine = [pickup, trip].compactMap { $0?.line }.min() ?? 0
+            let bare: [Money] = lines.enumerated().compactMap { i, l in
+                guard i < firstPairLine else { return nil }
+                let r = NSRange(location: 0, length: (l.text as NSString).length)
+                guard let m = Self.bareMoney.firstMatch(in: l.text, range: r),
+                      let v = NumberNormalizer.parse((l.text as NSString).substring(with: m.range(at: 1))), v >= 3 else { return nil }
+                return Money(value: v, line: i, start: lineStarts[i], isPlus: false, rate: nil, isExtra: false)
+            }
+            if hasGeometry, let tallest = bare.max(by: { lines[$0.line].box!.height < lines[$1.line].box!.height }) {
+                candidates = [tallest]
+                fareFromBareNumber = true
+            } else if bare.count == 1 {
+                candidates = bare
+                fareFromBareNumber = true
+            }
+        }
         var ambiguous = false
         var fareHit: Money?
         if candidates.count == 1 {
@@ -219,9 +321,18 @@ public struct OfferTextParser: Sendable {
             (group(m, 1) ?? group(m, 2)).flatMap { NumberNormalizer.parse($0) }.flatMap { (1...5).contains($0) ? $0 : nil }
         }.first
 
-        let normText = Self.normalize(text)
-        let hasAccept = Self.acceptKeywords.contains { normText.contains($0) }
-        let isOffer = (fareHit != nil && (pickup != nil || trip != nil)) || (hasAccept && (fareHit != nil || !pairs.isEmpty))
+        // Âncoras do cartão: botão de aceitar (linha própria), rótulos das distâncias, categoria ou nota.
+        let hasAccept = lines.contains { l in
+            let n = Self.normalize(l.text).trimmingCharacters(in: .whitespaces)
+            return Self.acceptKeywords.contains { n == $0 || n.hasPrefix($0 + " ") }
+        }
+        let hasLabels = pairs.contains { $0.label != .unlabeled }
+        let anchored = hasAccept || hasLabels || category != nil || rating != nil
+        // Lista de várias viagens (radar): muitos valores e muitos pares na mesma tela.
+        let isList = Set(candidates.map(\.value)).count >= 3 && pairs.count >= 4
+        // Chamado = valor + busca + viagem + pelo menos uma âncora. Menos que isso não vira notificação.
+        let isOffer = fareHit != nil && pickup != nil && trip != nil && anchored && !isList
+        let nearMiss = !isOffer && !isList && (hasAccept || hasLabels) && (fareHit != nil || !pairs.isEmpty)
 
         var conf = 0.0
         if fareHit != nil { conf += 0.35 }
@@ -230,6 +341,7 @@ public struct OfferTextParser: Sendable {
         if pickup != nil && trip != nil { conf += inferred ? 0.07 : 0.15 }
         conf -= min(0.15, 0.05 * Double(corrections))
         if ambiguous { conf -= 0.20 }
+        if fareFromBareNumber { conf -= 0.15 }
         conf -= min(0.10, 0.05 * Double(extraPairs))
         conf = min(1, max(0, conf))
 
@@ -240,13 +352,14 @@ public struct OfferTextParser: Sendable {
             pickupTimeMin: pickup?.minutes,
             tripTimeMin: trip?.minutes,
             category: category,
-            origin: pickup.flatMap { addressAfter(lines, $0.line) },
-            destination: trip.flatMap { addressAfter(lines, $0.line) },
+            origin: pickup.flatMap { addressAfter(lines, $0.endLine, maxLines: 2) },
+            destination: trip.flatMap { addressAfter(lines, $0.endLine, maxLines: 3) },
             surgeAmount: surge,
             displayedRatePerKm: displayedRate,
             passengerRating: rating
         )
-        return ParseResult(offer: offer, confidence: conf, isOfferScreen: isOffer, orderInferred: inferred, fareAmbiguous: ambiguous, ocrCorrections: corrections)
+        return ParseResult(offer: offer, confidence: conf, isOfferScreen: isOffer, orderInferred: inferred, fareAmbiguous: ambiguous,
+                           ocrCorrections: corrections, nearMiss: nearMiss, ownApp: false, cleanedText: text)
     }
 
     private func findPairs(_ ns: NSString, _ regex: NSRegularExpression, reversed: Bool, lineOf: (Int) -> Int) -> [Pair] {
@@ -310,23 +423,36 @@ public struct OfferTextParser: Sendable {
             } else {
                 label = .unlabeled
             }
-            out.append(Pair(minutes: minutes, km: km, label: label, start: start, line: lineOf(start)))
+            out.append(Pair(minutes: minutes, km: km, label: label, start: start, line: lineOf(start),
+                            endLine: lineOf(max(start, end - 1)), meters: unitRaw.lowercased() == "m"))
         }
         return out
     }
 
-    private func addressAfter(_ lines: [OcrLine], _ pairLine: Int) -> String? {
+    /// Endereço logo abaixo do par (pode ocupar mais de uma linha; as linhas ficam separadas por "\n").
+    private func addressAfter(_ lines: [OcrLine], _ pairLine: Int, maxLines: Int) -> String? {
         guard pairLine + 1 < lines.count else { return nil }
-        for i in (pairLine + 1)...min(lines.count - 1, pairLine + 2) {
+        var parts: [String] = []
+        var i = pairLine + 1
+        var skipped = 0
+        while i < lines.count, parts.count < maxLines {
             let t = lines[i].text.trimmingCharacters(in: .whitespaces)
             let n = Self.normalize(t)
-            if n.isEmpty || Self.pickupSuffixLines.contains(n) { continue }
+            i += 1
+            if n.isEmpty || Self.pickupSuffixLines.contains(n) || n == "de viagem" || n == "viagem" {
+                skipped += 1
+                if skipped > 2 { break }
+                continue
+            }
             let r = NSRange(location: 0, length: (t as NSString).length)
-            if Self.money.firstMatch(in: t, range: r) != nil || Self.distanceOnly.firstMatch(in: t, range: r) != nil { return nil }
-            if Self.acceptKeywords.contains(where: { n.contains($0) }) || Self.rejectKeywords.contains(n) { return nil }
-            if Self.tripKeywords.contains(where: { n == $0 || n.hasPrefix("\($0) ") || n.hasPrefix("\($0):") }) { return nil }
-            if t.filter(\.isLetter).count >= 4 { return String(t.prefix(80)) }
+            if Self.money.firstMatch(in: t, range: r) != nil || Self.distanceOnly.firstMatch(in: t, range: r) != nil { break }
+            if Self.pair.firstMatch(in: t, range: r) != nil || Self.rating.firstMatch(in: t, range: r) != nil { break }
+            if Self.acceptKeywords.contains(where: { n == $0 || n.hasPrefix($0 + " ") }) || Self.rejectKeywords.contains(n) { break }
+            if Self.tripKeywords.contains(where: { n == $0 || n.hasPrefix("\($0) ") || n.hasPrefix("\($0):") }) { break }
+            if n.range(of: #"^\d{1,3}\s*(min|minutos?)\b"#, options: .regularExpression) != nil { break }
+            guard t.filter(\.isLetter).count >= 3 else { break }
+            parts.append(String(t.prefix(80)))
         }
-        return nil
+        return parts.isEmpty ? nil : parts.joined(separator: "\n")
     }
 }

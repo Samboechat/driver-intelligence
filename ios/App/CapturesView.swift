@@ -121,26 +121,20 @@ struct CaptureDetail: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
+                Card { VerdictBlock(record: record) }
                 Card {
+                    Text("Detalhes").font(.headline)
                     HStack {
-                        Text(Br.money(record.fare)).font(.system(size: 30, weight: .bold).monospacedDigit())
-                        Spacer()
-                        Pill(text: record.verdict ?? record.cls.shortLabel, color: record.cls.color)
+                        Stat(title: "Total", value: Br.km(record.totalKm))
+                        Stat(title: "Viagem", value: Br.km(record.tripKm))
+                        Stat(title: "Tempo", value: record.realisticMin.map { "~\(Br.minutes($0))" } ?? Br.minutes(record.totalMin))
                     }
-                    Text(record.headline).font(.subheadline).foregroundStyle(record.cls.color)
-                    if let alert = record.alert {
-                        Text("⚠️ \(alert)").font(.footnote.weight(.semibold)).foregroundStyle(Palette.warning)
+                    if let o = Br.oneLine(record.origin) { Text("Embarque: \(o)").font(.footnote).foregroundStyle(.secondary) }
+                    if let d = Br.oneLine(record.destination) { Text("Destino: \(d)").font(.footnote).foregroundStyle(.secondary) }
+                    Text("O que você fez: \(record.result?.label ?? "sem registro")").font(.footnote).foregroundStyle(.secondary)
+                    if record.cls != .green, record.reasons?.isEmpty == false {
+                        Text(record.headline).font(.caption).foregroundStyle(.secondary)
                     }
-                    HStack {
-                        Stat(title: "R$/km", value: Br.decimal(record.revenuePerKm))
-                        Stat(title: "R$/h", value: Br.decimal(record.revenuePerHour, 0))
-                        Stat(title: "Lucro", value: Br.money(record.profit))
-                    }
-                    Text([record.category, Br.km(record.totalKm), record.realisticMin.map { "~\(Br.minutes($0)) real" } ?? Br.minutes(record.totalMin), record.result?.label]
-                        .compactMap { $0 }.joined(separator: " · "))
-                        .font(.footnote).foregroundStyle(.secondary)
-                    if let o = record.origin { Text("Embarque: \(o)").font(.caption).foregroundStyle(.secondary) }
-                    if let d = record.destination { Text("Destino: \(d)").font(.caption).foregroundStyle(.secondary) }
                 }
                 if record.screenshot != nil {
                     ScreenshotImage(name: record.screenshot)

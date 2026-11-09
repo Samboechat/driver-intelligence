@@ -43,6 +43,10 @@ struct DriverSettings: Codable, Equatable {
     var weeklyGoal = WeeklyGoal()
     /// Dynamic Island / Atividade ao Vivo (experimental).
     var liveActivity: Bool = true
+    /// Som diferente para aceitar, avaliar e recusar.
+    var verdictSounds: Bool = true
+    /// Guardar o texto das telas que pareciam chamado e não foram lidas (diagnóstico; fica só no aparelho).
+    var keepReadDiagnostics: Bool = true
     /// Versão dos ajustes salvos (para migrar padrões).
     var schema: Int = 2
 
@@ -81,6 +85,8 @@ struct DriverSettings: Codable, Equatable {
         matrix = v(.matrix, d.matrix)
         weeklyGoal = v(.weeklyGoal, d.weeklyGoal)
         liveActivity = v(.liveActivity, d.liveActivity)
+        verdictSounds = v(.verdictSounds, d.verdictSounds)
+        keepReadDiagnostics = v(.keepReadDiagnostics, d.keepReadDiagnostics)
         // Ajustes salvos antes da versão 2: os prints passam a ser opcionais e começam desligados.
         if v(.schema, 1) < 2 {
             saveScreenshots = false
@@ -155,6 +161,9 @@ struct OfferRecord: Codable, Identifiable, Equatable {
     var zone: String?
     var alert: String?
     var rating: Double?
+    /// Motivos curtos do veredito (os mesmos da notificação).
+    var reasons: [String]?
+    var tripKm: Double?
 
     var cls: Classification { Classification(rawValue: classification) ?? .gray }
     var result: OfferOutcome? { outcome.flatMap(OfferOutcome.init(rawValue:)) }
@@ -183,6 +192,11 @@ struct OfferRecord: Codable, Identifiable, Equatable {
         zone = a.matrix.flatMap { $0.zone.kind == .neutral ? nil : $0.zone.kind.rawValue }
         alert = a.matrix?.alert
         rating = a.offer.passengerRating
+        if let m = a.matrix {
+            let r = a.decision.classification == .red ? m.shortRefusals : m.shortCautions
+            reasons = r.isEmpty ? nil : r
+        }
+        tripKm = a.offer.tripDistanceKm
     }
 }
 
@@ -224,11 +238,13 @@ struct BroadcastStatus: Codable, Equatable {
     var tripAcceptedAt: Date?
     var tripFare: Double?
     var tripPredictedMin: Double?
+    /// Telas que pareciam chamado e não foram lidas nesta gravação.
+    var missed: Int? = nil
 }
 
 /// Pedido do app para a extensão (ex.: botão "Aceitei" na notificação).
 struct AppCommand: Codable, Equatable {
-    enum Action: String, Codable { case accept, finish, reset }
+    enum Action: String, Codable { case accept, finish, reset, resetLearning }
     var id = UUID().uuidString
     var action: Action
     var fingerprint: String?
@@ -326,6 +342,43 @@ enum SharedStore {
         set { if let newValue { save("command", newValue) } else { defaults.removeObject(forKey: "command") } }
     }
 
+    // MARK: Sincronização com a extensão (ver Bridge)
+
+    /// Momento do último estado recebido da extensão de leitura.
+    static var bridgeAt: Date? {
+        get { defaults.object(forKey: "bridgeAt") as? Date }
+        set { defaults.set(newValue, forKey: "bridgeAt") }
+    }
+
+    /// Último sinal de vida da extensão.
+    static var pulseAt: Date? {
+        get { defaults.object(forKey: "pulseAt") as? Date }
+        set { defaults.set(newValue, forKey: "pulseAt") }
+    }
+
+    /// "Limpar histórico": registros até essa data não voltam na sincronização.
+    static var historyClearedAt: Date? {
+        get { defaults.object(forKey: "historyClearedAt") as? Date }
+        set { defaults.set(newValue, forKey: "historyClearedAt") }
+    }
+
+    static var tripsClearedAt: Date? {
+        get { defaults.object(forKey: "tripsClearedAt") as? Date }
+        set { defaults.set(newValue, forKey: "tripsClearedAt") }
+    }
+
+    /// Corridas apagadas uma a uma (para não voltarem na sincronização).
+    static var deletedTrips: [String] {
+        get { load("deletedTrips", [String].self) ?? [] }
+        set { save("deletedTrips", Array(newValue.suffix(300))) }
+    }
+
+    /// Telas que pareciam chamado e não foram lidas (diagnóstico).
+    static var misses: [ReadMiss] {
+        get { load("misses", [ReadMiss].self) ?? [] }
+        set { save("misses", Array(newValue.prefix(6))) }
+    }
+
     /// Prints já copiados para o álbum de Fotos.
     static var savedToPhotos: Set<String> {
         get { Set(load("savedToPhotos", [String].self) ?? []) }
@@ -383,7 +436,7 @@ enum SharedStore {
             out += "corrida;\(df.string(from: t.acceptedAt));\(n(t.fare));\(t.category ?? "");\(n(t.totalKm, 1));\(n(t.offeredMin, 0));\(n(t.totalMin, 0));\(n(t.fare.flatMap { f in t.totalKm.map { f / $0 } }));\(n(t.revenuePerHour));\(n(t.profit));\(t.cls.label);realizada;;;\r\n"
         }
         for o in history {
-            out += "oferta;\(df.string(from: o.date));\(n(o.fare));\(o.category ?? "");\(n(o.totalKm, 1));\(n(o.totalMin, 0));\(n(o.realisticMin, 0));\(n(o.revenuePerKm));\(n(o.revenuePerHour));\(n(o.profit));\(o.cls.label);\(o.result?.label ?? "");\(o.verdict ?? "");\(o.zoneKind?.label ?? "");\((o.destination ?? "").replacingOccurrences(of: ";", with: ","))\r\n"
+            out += "oferta;\(df.string(from: o.date));\(n(o.fare));\(o.category ?? "");\(n(o.totalKm, 1));\(n(o.totalMin, 0));\(n(o.realisticMin, 0));\(n(o.revenuePerKm));\(n(o.revenuePerHour));\(n(o.profit));\(o.cls.label);\(o.result?.label ?? "");\(o.verdict ?? "");\(o.zoneKind?.label ?? "");\((Br.oneLine(o.destination) ?? "").replacingOccurrences(of: ";", with: ","))\r\n"
         }
         return out
     }

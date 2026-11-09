@@ -22,15 +22,31 @@ enum Notifier {
         ])
     }
 
-    static func post(_ a: OfferAnalysis, settings: DriverSettings, identifier: String, screenshot: URL? = nil) {
+    /// Sons por veredito (arquivos dentro do app). Sem o arquivo, o iOS toca o som padrão.
+    static func sound(for c: Classification) -> UNNotificationSound {
+        switch c {
+        case .green: return UNNotificationSound(named: UNNotificationSoundName("di-aceitar.wav"))
+        case .yellow: return UNNotificationSound(named: UNNotificationSoundName("di-avaliar.wav"))
+        case .red: return UNNotificationSound(named: UNNotificationSoundName("di-recusar.wav"))
+        case .gray: return .default
+        }
+    }
+
+    /// `record`: o chamado como vai para o histórico (viaja junto, para o app conseguir salvá-lo).
+    static func post(_ a: OfferAnalysis, settings: DriverSettings, identifier: String, screenshot: URL? = nil, record: OfferRecord? = nil) {
         let c = NotificationFormatter.format(a, goals: settings.goals, hourFloor: settings.hourFloor)
         let content = UNMutableNotificationContent()
         content.title = c.title
+        content.subtitle = c.subtitle
         content.body = c.body
         content.threadIdentifier = offerThread
         content.categoryIdentifier = offerCategory
-        content.userInfo = ["fingerprint": a.fingerprint ?? ""]
-        content.sound = settings.notifySound ? .default : nil
+        var info: [String: Any] = ["fingerprint": a.fingerprint ?? ""]
+        if let record, let data = try? JSONEncoder().encode(record) { info["rec"] = data }
+        content.userInfo = info
+        if settings.notifySound {
+            content.sound = settings.verdictSounds ? sound(for: a.decision.classification) : .default
+        }
         if #available(iOS 15.0, *) {
             content.interruptionLevel = .active
             content.relevanceScore = a.decision.classification == .green ? 1 : 0.5
@@ -75,13 +91,21 @@ enum Notifier {
         UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: "trip-\(t.id)", content: content, trigger: nil))
     }
 
-    /// Notificação de exemplo, para conferir se elas aparecem (e passam pelo Foco).
+    /// Notificações de exemplo (uma de cada veredito), para conferir o texto e os sons.
     static func sendTest(settings: DriverSettings) {
-        let a = OfferAnalyzer().analyze(
-            offer: OfferData(fare: 19.20, pickupDistanceKm: 1.2, tripDistanceKm: 7.7, pickupTimeMin: 4, tripTimeMin: 14, category: "UberX",
-                             destination: "Parque Campolim, Sorocaba", passengerRating: 4.92),
-            context: settings.context
-        )
-        post(a, settings: settings, identifier: "teste-\(Date().timeIntervalSince1970)")
+        let samples: [OfferData] = [
+            OfferData(fare: 27.50, pickupDistanceKm: 1.4, tripDistanceKm: 9.6, pickupTimeMin: 4, tripTimeMin: 17, category: "Comfort",
+                      destination: "Parque Campolim, Sorocaba", passengerRating: 4.92),
+            OfferData(fare: 9.80, pickupDistanceKm: 4.2, tripDistanceKm: 3.1, pickupTimeMin: 11, tripTimeMin: 9, category: "UberX",
+                      destination: "Éden, Sorocaba", passengerRating: 4.71),
+        ]
+        var ctx = settings.context
+        ctx.useRealisticTime = false
+        for (i, offer) in samples.enumerated() {
+            let a = OfferAnalyzer().analyze(offer: offer, context: ctx)
+            DispatchQueue.main.asyncAfter(deadline: .now() + Double(i) * 3.5) {
+                post(a, settings: settings, identifier: "teste-\(i)-\(Date().timeIntervalSince1970)")
+            }
+        }
     }
 }

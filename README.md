@@ -87,7 +87,7 @@ app/src/main/java/com/driverintelligence/
 
 ## iPhone (pasta `ios/`)
 
-Versão iOS 0.3, instalada por IPA (ESign/AltStore). A leitura usa a transmissão de tela do iOS e o resultado chega por notificação.
+Versão iOS 0.4, instalada por IPA (ESign/AltStore). A leitura usa a transmissão de tela do iOS e o resultado chega por notificação.
 
 - **Matriz de aceite** (`DriverCore/AcceptanceMatrix.swift`): ACEITAR / AVALIAR / RECUSAR por categoria.
   R$/km = valor ÷ (busca + viagem). CPK R$ 0,50. Piso R$ 42/h (recusa abaixo), ideal R$ 54/h.
@@ -100,6 +100,12 @@ Versão iOS 0.3, instalada por IPA (ESign/AltStore). A leitura usa a transmissã
   Tudo editável em Ajustes › Matriz de aceite.
 - **Painel**: meta da semana (R$ 2.820 e 56 h online), turno com hodômetro (km rodados, km morto, R$/km real) e decisões do dia.
 - **Privacidade**: cada quadro é lido na memória e descartado. Prints são opcionais e começam desligados.
+- **Chamado de verdade**: só vira notificação o cartão completo (valor + busca + viagem + botão/rótulos). A nossa
+  própria notificação e o nosso próprio app, que também aparecem na gravação, são descartados antes da leitura.
+- **Canal app ↔ leitura** (`Shared/Bridge.swift`): funciona sem App Group (ESign costuma removê-lo). O estado da
+  gravação, os chamados e os ajustes viajam pela central de notificações; cada notificação também leva o seu registro.
+- **Notificação**: título com veredito e valor, subtítulo com R$/km e R$/h, corpo com o motivo. Um som por veredito.
+- **Diagnóstico** (Ajustes › Diagnóstico da leitura): estado do canal e o texto dos chamados que não foram lidos.
 - **Dynamic Island** (experimental): aberta pelo app; a atualização em segundo plano depende do iOS.
 
 Testes do núcleo: `cd ios/DriverCore && swift test`. O IPA sai do workflow `iOS` (GitHub Actions), sem assinatura.

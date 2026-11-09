@@ -47,6 +47,8 @@ jobs:
           test -d build/Build/Products/Release-iphoneos/DriverIntelligence.app
           test -d build/Build/Products/Release-iphoneos/DriverIntelligence.app/PlugIns/BroadcastExtension.appex
           test -d build/Build/Products/Release-iphoneos/DriverIntelligence.app/PlugIns/LiveActivity.appex
+          test -f build/Build/Products/Release-iphoneos/DriverIntelligence.app/di-aceitar.wav
+          test -f build/Build/Products/Release-iphoneos/DriverIntelligence.app/di-recusar.wav
 
       - name: Resumo de erros (anotações)
         if: failure()
