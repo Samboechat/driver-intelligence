@@ -67,13 +67,18 @@ struct HomeView: View {
                  : "Toque no botão abaixo e escolha \"Driver Intelligence\" para começar a transmitir a tela. O texto é lido no próprio iPhone; nenhuma imagem é salva ou enviada.")
                 .font(.footnote).foregroundStyle(.secondary)
             BroadcastButton(running: status.running)
-                .frame(height: 54)
             if status.running || status.framesAnalyzed > 0 {
                 HStack {
                     Stat(title: "Quadros lidos", value: "\(status.framesAnalyzed)")
                     Stat(title: "Ofertas", value: "\(status.offersNotified)")
                     Stat(title: "Leitura", value: status.lastOcrMs.map { "\($0) ms" } ?? "—")
                 }
+            }
+            if BroadcastButton.extensionBundleId == nil {
+                Banner(text: "A extensão de leitura de tela não está dentro do app instalado. No ESign, desative a opção de remover plugins/extensões (\"Remove PlugIns\") e assine de novo.", color: Palette.negative)
+            } else {
+                Text("Se o botão não abrir a janela: Central de Controle › segure o botão de Gravação de Tela › escolha Driver Intelligence › Iniciar Transmissão.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
             if let e = status.lastError {
                 Text("Último erro: \(e)").font(.caption).foregroundStyle(Palette.warning)
@@ -153,56 +158,59 @@ struct HomeView: View {
     }
 }
 
-/// Botão do sistema que abre a escolha de transmissão, já apontando para a nossa extensão.
-struct BroadcastButton: UIViewRepresentable {
-    var running: Bool
+/// Seletor de transmissão do sistema. Fica escondido (mas no layout) e é acionado pelo nosso botão:
+/// o botão interno do RPSystemBroadcastPickerView só recebe toques no tamanho com que foi criado,
+/// então disparamos a ação dele diretamente.
+final class BroadcastPickerHolder: ObservableObject {
+    let picker: RPSystemBroadcastPickerView = {
+        let p = RPSystemBroadcastPickerView(frame: CGRect(x: 0, y: 0, width: 60, height: 60))
+        p.showsMicrophoneButton = false
+        p.preferredExtension = BroadcastButton.extensionBundleId
+        return p
+    }()
 
+    func open() {
+        picker.preferredExtension = BroadcastButton.extensionBundleId
+        for case let button as UIButton in picker.subviews {
+            button.sendActions(for: .touchUpInside)
+            button.sendActions(for: .touchDown)
+            return
+        }
+    }
+}
+
+struct PickerHost: UIViewRepresentable {
+    let holder: BroadcastPickerHolder
     func makeUIView(context: Context) -> UIView {
-        let container = UIView()
-        let picker = RPSystemBroadcastPickerView(frame: .zero)
-        picker.preferredExtension = Self.extensionBundleId
-        picker.showsMicrophoneButton = false
-        picker.translatesAutoresizingMaskIntoConstraints = false
-        container.addSubview(picker)
+        let v = UIView(frame: CGRect(x: 0, y: 0, width: 60, height: 60))
+        v.alpha = 0.011 // presente na hierarquia, mas invisível
+        v.isUserInteractionEnabled = false
+        v.addSubview(holder.picker)
+        return v
+    }
+    func updateUIView(_ uiView: UIView, context: Context) {}
+}
 
-        let label = UILabel()
-        label.font = .systemFont(ofSize: 17, weight: .semibold)
-        label.textColor = UIColor(red: 0.04, green: 0.05, blue: 0.06, alpha: 1)
-        label.textAlignment = .center
-        label.isUserInteractionEnabled = false
-        label.translatesAutoresizingMaskIntoConstraints = false
-        label.tag = 99
-        container.addSubview(label)
+struct BroadcastButton: View {
+    var running: Bool
+    @StateObject private var holder = BroadcastPickerHolder()
 
-        container.backgroundColor = UIColor(Palette.brand)
-        container.layer.cornerRadius = 14
-        container.clipsToBounds = true
-        NSLayoutConstraint.activate([
-            picker.leadingAnchor.constraint(equalTo: container.leadingAnchor),
-            picker.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-            picker.topAnchor.constraint(equalTo: container.topAnchor),
-            picker.bottomAnchor.constraint(equalTo: container.bottomAnchor),
-            label.centerXAnchor.constraint(equalTo: container.centerXAnchor),
-            label.centerYAnchor.constraint(equalTo: container.centerYAnchor),
-        ])
-        // O ícone padrão do seletor fica invisível; o toque cobre o botão inteiro.
-        for sub in picker.subviews {
-            if let b = sub as? UIButton {
-                b.imageView?.tintColor = .clear
-                b.setImage(nil, for: .normal)
+    var body: some View {
+        ZStack {
+            PickerHost(holder: holder).frame(width: 1, height: 1)
+            Button {
+                holder.open()
+            } label: {
+                Text(running ? "Parar / trocar transmissão" : "Iniciar leitura de ofertas")
+                    .font(.headline)
+                    .frame(maxWidth: .infinity, minHeight: 54)
+                    .foregroundStyle(Palette.background)
+                    .background(Palette.brand, in: RoundedRectangle(cornerRadius: 14))
             }
         }
-        update(container)
-        return container
     }
 
-    func updateUIView(_ uiView: UIView, context: Context) { update(uiView) }
-
-    private func update(_ v: UIView) {
-        (v.viewWithTag(99) as? UILabel)?.text = running ? "Parar / trocar transmissão" : "Iniciar leitura de ofertas"
-    }
-
-    /// Identificador real da extensão instalada (ferramentas de instalação podem alterá-lo).
+    /// Identificador real da extensão instalada (instaladores como AltStore/ESign podem alterá-lo).
     static var extensionBundleId: String? {
         guard let plugins = Bundle.main.builtInPlugInsURL,
               let items = try? FileManager.default.contentsOfDirectory(at: plugins, includingPropertiesForKeys: nil) else { return nil }
