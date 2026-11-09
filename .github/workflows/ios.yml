@@ -1,0 +1,79 @@
+name: iOS
+
+on:
+  push:
+    branches: [ main ]
+    paths: [ "ios/**", ".github/workflows/ios.yml" ]
+  workflow_dispatch:
+
+concurrency:
+  group: ios-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ipa:
+    name: Testes + IPA
+    runs-on: macos-14
+    timeout-minutes: 45
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Testes do núcleo (Swift)
+        working-directory: ios/DriverCore
+        run: swift test 2>&1 | tee ../core-tests.log
+
+      - name: Gerar projeto Xcode
+        working-directory: ios
+        run: |
+          brew install xcodegen
+          xcodegen generate
+
+      - name: Compilar (sem assinatura — o AltStore/Sideloadly assina na instalação)
+        working-directory: ios
+        run: |
+          set -o pipefail
+          xcodebuild -version
+          xcodebuild \
+            -project DriverIntelligence.xcodeproj \
+            -scheme DriverIntelligence \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+            build 2>&1 | tee build.log | grep -E "error:|warning: .*deprecated|BUILD" || true
+          test -d build/Build/Products/Release-iphoneos/DriverIntelligence.app
+
+      - name: Resumo de erros (anotações)
+        if: failure()
+        working-directory: ios
+        run: |
+          cat core-tests.log build.log 2>/dev/null | grep -E "error:|failed|XCTAssert|fatal" | head -200 > errors.txt || true
+          python3 - <<'PY'
+          lines = [l.rstrip() for l in open('errors.txt', encoding='utf-8', errors='replace')]
+          for i in range(0, min(len(lines), 400), 40):
+              msg = '\n'.join(lines[i:i+40]).replace('%', '%25').replace('\r', '').replace('\n', '%0A')
+              print(f"::error title=ios-{i//40}::{msg}")
+          PY
+
+      - name: Empacotar IPA (com os direitos do App Group declarados)
+        working-directory: ios
+        run: |
+          APP=build/Build/Products/Release-iphoneos/DriverIntelligence.app
+          codesign -f -s - --entitlements BroadcastExtension/Extension.entitlements "$APP/PlugIns/BroadcastExtension.appex"
+          codesign -f -s - --entitlements App/App.entitlements "$APP"
+          rm -rf Payload && mkdir Payload && cp -R "$APP" Payload/
+          zip -qry DriverIntelligence.ipa Payload
+          ls -la DriverIntelligence.ipa
+
+      - name: Página de download (Releases)
+        if: github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete ios-ultima-versao --yes --cleanup-tag || true
+          gh release create ios-ultima-versao ios/DriverIntelligence.ipa \
+            --title "Driver Intelligence iPhone — última versão" \
+            --notes "Baixe o DriverIntelligence.ipa e instale pelo AltStore (ou Sideloadly). Gerado do commit ${GITHUB_SHA::7}."

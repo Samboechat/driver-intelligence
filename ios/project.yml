@@ -1,0 +1,75 @@
+# Projeto Xcode gerado pelo XcodeGen (o .xcodeproj não é versionado).
+# Gerar localmente num Mac: `brew install xcodegen && cd ios && xcodegen generate`
+name: DriverIntelligence
+options:
+  bundleIdPrefix: com.samboechat
+  deploymentTarget:
+    iOS: "16.0"
+  developmentLanguage: pt-BR
+
+packages:
+  DriverCore:
+    path: DriverCore
+
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    DEVELOPMENT_TEAM: ""
+    CODE_SIGN_STYLE: Automatic
+    TARGETED_DEVICE_FAMILY: "1"
+
+targets:
+  DriverIntelligence:
+    type: application
+    platform: iOS
+    scheme: {}
+    sources:
+      - App
+      - Shared
+    dependencies:
+      - package: DriverCore
+      - target: BroadcastExtension
+        embed: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.samboechat.driverintelligence
+        PRODUCT_NAME: DriverIntelligence
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        CODE_SIGN_ENTITLEMENTS: App/App.entitlements
+    info:
+      path: App/Info.plist
+      properties:
+        CFBundleDisplayName: Driver Intelligence
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        LSRequiresIPhoneOS: true
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
+        UIUserInterfaceStyle: Dark
+        ITSAppUsesNonExemptEncryption: false
+
+  BroadcastExtension:
+    type: app-extension
+    platform: iOS
+    sources:
+      - BroadcastExtension
+      - Shared
+    dependencies:
+      - package: DriverCore
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.samboechat.driverintelligence.broadcast
+        PRODUCT_NAME: BroadcastExtension
+        CODE_SIGN_ENTITLEMENTS: BroadcastExtension/Extension.entitlements
+    info:
+      path: BroadcastExtension/Info.plist
+      properties:
+        CFBundleDisplayName: Driver Intelligence
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.broadcast-services-upload
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).SampleHandler
+          RPBroadcastProcessMode: RPBroadcastProcessModeSampleBuffer
