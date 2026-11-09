@@ -110,7 +110,12 @@ struct OfferRow: View {
             Spacer()
             VStack(alignment: .trailing, spacing: 2) {
                 Text(record.revenuePerKm.map { "\(Br.decimal($0))/km" } ?? "—").font(.subheadline.monospacedDigit()).foregroundStyle(record.cls.color)
-                Text(record.date, style: .time).font(.caption).foregroundStyle(.secondary)
+                HStack(spacing: 4) {
+                    if record.screenshot != nil { Image(systemName: "photo").font(.caption2) }
+                    if let r = record.result { Text(r.label).font(.caption2.weight(.semibold)) }
+                    Text(record.date, style: .time).font(.caption)
+                }
+                .foregroundStyle(.secondary)
             }
         }
     }

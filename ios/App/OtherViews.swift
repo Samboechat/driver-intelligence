@@ -77,16 +77,50 @@ struct AnalysisSummary: View {
 
 struct HistoryView: View {
     @State private var history = SharedStore.history
+    @State private var trips = SharedStore.trips
+    @State private var mode = 0
+    @State private var confirmClear = false
 
     var body: some View {
         NavigationStack {
             List {
-                if history.isEmpty {
-                    Text("As ofertas lidas durante a transmissão aparecem aqui.").foregroundStyle(.secondary)
+                Picker("", selection: $mode) {
+                    Text("Chamados").tag(0)
+                    Text("Corridas feitas").tag(1)
                 }
-                ForEach(groupedDays, id: \.0) { day, items in
-                    Section(day) {
-                        ForEach(items) { OfferRow(record: $0) }
+                .pickerStyle(.segmented)
+                .listRowBackground(Color.clear)
+
+                if mode == 0 {
+                    if history.isEmpty {
+                        Text("Os chamados lidos durante a transmissão aparecem aqui.").foregroundStyle(.secondary)
+                    }
+                    ForEach(grouped(history, \.date), id: \.0) { day, items in
+                        Section(day) {
+                            ForEach(items) { r in
+                                NavigationLink { CaptureDetail(record: r) } label: { OfferRow(record: r) }
+                            }
+                        }
+                    }
+                } else {
+                    if trips.isEmpty {
+                        Text("Corridas aceitas e concluídas aparecem aqui, com o tempo real de cada uma.").foregroundStyle(.secondary)
+                    }
+                    ForEach(grouped(trips, \.completedAt), id: \.0) { day, items in
+                        Section {
+                            ForEach(items) { TripRow(trip: $0) }
+                                .onDelete { idx in
+                                    let ids = idx.map { items[$0].id }
+                                    trips.removeAll { ids.contains($0.id) }
+                                    SharedStore.trips = trips
+                                }
+                        } header: {
+                            HStack {
+                                Text(day)
+                                Spacer()
+                                Text(Br.money(items.compactMap(\.fare).reduce(0, +)))
+                            }
+                        }
                     }
                 }
             }
@@ -94,28 +128,71 @@ struct HistoryView: View {
             .background(Palette.background.ignoresSafeArea())
             .navigationTitle("Histórico")
             .toolbar {
-                if !history.isEmpty {
-                    Button("Limpar", role: .destructive) {
-                        SharedStore.history = []
-                        history = []
+                ToolbarItem(placement: .navigationBarLeading) {
+                    if !history.isEmpty || !trips.isEmpty {
+                        ShareLink(item: csvFile()) { Label("Exportar", systemImage: "square.and.arrow.up") }
+                    }
+                }
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    if !history.isEmpty || !trips.isEmpty {
+                        Button("Limpar", role: .destructive) { confirmClear = true }
                     }
                 }
             }
-            .refreshable { history = SharedStore.history }
-            .onAppear { history = SharedStore.history }
+            .confirmationDialog("Apagar o histórico?", isPresented: $confirmClear, titleVisibility: .visible) {
+                Button("Apagar chamados", role: .destructive) { SharedStore.history = []; history = [] }
+                Button("Apagar corridas feitas", role: .destructive) { SharedStore.trips = []; trips = [] }
+            } message: {
+                Text("Os prints já enviados ao app Fotos continuam no álbum.")
+            }
+            .refreshable { reload() }
+            .onAppear(perform: reload)
         }
     }
 
-    private var groupedDays: [(String, [OfferRecord])] {
+    private func reload() {
+        history = SharedStore.history
+        trips = SharedStore.trips
+    }
+
+    private func csvFile() -> URL {
+        let df = DateFormatter()
+        df.dateFormat = "yyyy-MM-dd"
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("driver-intelligence-\(df.string(from: Date())).csv")
+        try? SharedStore.csv().write(to: url, atomically: true, encoding: .utf8)
+        return url
+    }
+
+    private func grouped<T: Identifiable>(_ items: [T], _ date: KeyPath<T, Date>) -> [(String, [T])] {
         let f = DateFormatter()
         f.locale = Locale(identifier: "pt_BR")
         f.dateFormat = "EEEE, d 'de' MMMM"
-        var out: [(String, [OfferRecord])] = []
-        for r in history {
-            let key = f.string(from: r.date).capitalized
+        var out: [(String, [T])] = []
+        for r in items {
+            let key = f.string(from: r[keyPath: date]).capitalized
             if let i = out.firstIndex(where: { $0.0 == key }) { out[i].1.append(r) } else { out.append((key, [r])) }
         }
         return out
+    }
+}
+
+struct TripRow: View {
+    var trip: TripRecord
+    var body: some View {
+        HStack(spacing: 12) {
+            RoundedRectangle(cornerRadius: 2).fill(trip.cls.color).frame(width: 4, height: 44)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(Br.money(trip.fare)).font(.headline.monospacedDigit())
+                Text([trip.category, Br.km(trip.totalKm), "real \(Br.minutes(trip.totalMin))", trip.offeredMin.map { "app \(Br.minutes($0))" }]
+                    .compactMap { $0 }.joined(separator: " · "))
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Spacer()
+            VStack(alignment: .trailing, spacing: 2) {
+                Text(Br.perHour(trip.revenuePerHour)).font(.subheadline.monospacedDigit()).foregroundStyle(trip.cls.color)
+                Text(trip.acceptedAt, style: .time).font(.caption).foregroundStyle(.secondary)
+            }
+        }
     }
 }
 
@@ -169,7 +246,26 @@ struct SettingsView: View {
                     Text("Notificações e leitura")
                 }
                 Section {
-                    Text("Processamento 100% no iPhone. Nenhuma imagem da tela é salva ou enviada.")
+                    Toggle("Salvar print de cada chamado", isOn: $s.saveScreenshots)
+                    Toggle("Mostrar o print na notificação", isOn: $s.attachScreenshot)
+                } header: {
+                    Text("Prints")
+                } footer: {
+                    Text("Os prints vão para o álbum \"Driver Intelligence\" do app Fotos e ficam na aba Prints.")
+                }
+                Section {
+                    NumberField(title: "Meta diária", value: $s.dailyGoal, suffix: "R$")
+                    Toggle("Detectar aceite e recusa", isOn: $s.autoTrack)
+                    Toggle("Registrar corridas concluídas", isOn: $s.autoRegisterTrips)
+                    Toggle("Resumo ao fim de cada corrida", isOn: $s.notifyTripSummary)
+                    Button("Recomeçar o aprendizado de tempo", role: .destructive) { SharedStore.samples = [] }
+                } header: {
+                    Text("Corridas")
+                } footer: {
+                    Text("O app mede quanto cada corrida aceita realmente demora e, depois de 5 corridas, passa a corrigir o tempo das ofertas pelo seu histórico em cada horário.")
+                }
+                Section {
+                    Text("Processamento 100% no iPhone. Prints e análises ficam só no aparelho; nada é enviado para a internet.")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
             }
