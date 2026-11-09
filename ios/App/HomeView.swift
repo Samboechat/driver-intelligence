@@ -12,6 +12,7 @@ struct HomeView: View {
     @State private var settings = SharedStore.settings
     @State private var focusConfirmed = UserDefaults.standard.bool(forKey: "focusConfirmed")
     @State private var testSent = false
+    @State private var showSimulator = false
     private let timer = Timer.publish(every: 2, on: .main, in: .common).autoconnect()
 
     private var isLive: Bool {
@@ -33,7 +34,7 @@ struct HomeView: View {
                     if !SharedStore.isShared {
                         Banner(text: "Grupo do app indisponível: a extensão vai usar os ajustes padrão e o app não verá os prints. No ESign, assine mantendo as extensões e os grupos (App Groups) do app.", color: Palette.warning)
                     }
-                    if !perms.notificationsOK || !perms.photosOK || !focusConfirmed || !testSent && today.isEmpty { setupCard }
+                    if !perms.notificationsOK || (settings.saveScreenshots && !perms.photosOK) || !focusConfirmed || !testSent && today.isEmpty { setupCard }
                     earningsCard
                     if !today.isEmpty { todayCard }
                     learningCard
@@ -43,6 +44,14 @@ struct HomeView: View {
             }
             .background(Palette.background.ignoresSafeArea())
             .navigationTitle("Driver Intelligence")
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button { showSimulator = true } label: { Label("Simular", systemImage: "function") }
+                }
+            }
+            .sheet(isPresented: $showSimulator) {
+                SimulatorView().preferredColorScheme(.dark)
+            }
         }
         .onAppear(perform: refresh)
         .onReceive(timer) { _ in refresh() }
@@ -72,7 +81,8 @@ struct HomeView: View {
                 Spacer()
             }
             Text(isLive
-                 ? "Pode abrir o Uber Driver. Cada chamado vira uma notificação com R$/km, R$/h, lucro e veredito, e um print vai para o álbum."
+                 ? "Pode abrir o Uber Driver. Cada chamado vira uma notificação com R$/km, R$/h, lucro e veredito."
+                    + (settings.saveScreenshots ? " Um print de cada chamado vai para o álbum." : " Nenhuma imagem da tela é guardada.")
                  : "Toque no botão abaixo e escolha \"Driver Intelligence\" › Iniciar Transmissão. A leitura é feita no próprio iPhone.")
                 .font(.footnote).foregroundStyle(.secondary)
             BroadcastButton(running: status.running)
@@ -80,7 +90,7 @@ struct HomeView: View {
                 HStack {
                     Stat(title: "Quadros", value: "\(status.framesAnalyzed)")
                     Stat(title: "Chamados", value: "\(status.offersNotified)")
-                    Stat(title: "Prints", value: "\(status.screenshotsSaved)")
+                    if settings.saveScreenshots { Stat(title: "Prints", value: "\(status.screenshotsSaved)") }
                     Stat(title: "Leitura", value: status.lastOcrMs.map { "\($0) ms" } ?? "—")
                 }
             }
@@ -138,7 +148,8 @@ struct HomeView: View {
                     if perms.notifications == .notDetermined { Task { await perms.requestNotifications() } } else { perms.openSettings() }
                 })
             )
-            StepRow(
+            if settings.saveScreenshots {
+              StepRow(
                 number: 2,
                 title: "Fotos (prints dos chamados)",
                 detail: "Para salvar o print de cada chamado no álbum \"Driver Intelligence\".",
@@ -146,7 +157,8 @@ struct HomeView: View {
                 action: perms.photosOK ? nil : (PhotoAlbum.notDetermined ? "Permitir" : "Abrir Ajustes", {
                     if PhotoAlbum.notDetermined { Task { await perms.requestPhotos() } } else { perms.openAppSettings() }
                 })
-            )
+              )
+            }
             StepRow(
                 number: 3,
                 title: "Permitir durante o Foco",
@@ -206,9 +218,9 @@ struct HomeView: View {
                 Text("\(today.count)").font(.subheadline).foregroundStyle(.secondary)
             }
             HStack {
-                Stat(title: "Rentáveis", value: "\(today.filter { $0.cls == .green }.count)", color: Palette.positive)
-                Stat(title: "Moderados", value: "\(today.filter { $0.cls == .yellow }.count)", color: Palette.warning)
-                Stat(title: "Abaixo", value: "\(today.filter { $0.cls == .red }.count)", color: Palette.negative)
+                Stat(title: settings.useMatrix ? "Aceitar" : "Rentáveis", value: "\(today.filter { $0.cls == .green }.count)", color: Palette.positive)
+                Stat(title: settings.useMatrix ? "Avaliar" : "Moderados", value: "\(today.filter { $0.cls == .yellow }.count)", color: Palette.warning)
+                Stat(title: settings.useMatrix ? "Recusar" : "Abaixo", value: "\(today.filter { $0.cls == .red }.count)", color: Palette.negative)
             }
             HStack {
                 Stat(title: "Aceitos", value: "\(today.filter { $0.result == .accepted }.count)")
@@ -238,7 +250,7 @@ struct HomeView: View {
     private var howItWorks: some View {
         Card {
             Text("Como funciona").font(.headline)
-            Text("O iPhone não permite janelas por cima de outros apps. Por isso o Driver Intelligence usa a transmissão de tela do iOS: lê o chamado, calcula com os custos do seu carro, manda a notificação e salva o print. Um indicador vermelho no topo mostra que a transmissão está ligada; para parar, toque nele.")
+            Text("O iPhone não permite janelas por cima de outros apps. Por isso o Driver Intelligence usa a transmissão de tela do iOS: lê o chamado no próprio aparelho, aplica a sua matriz de aceite e manda a notificação. Cada quadro é descartado logo depois de lido (prints só se você ligar nos Ajustes). Um indicador vermelho no topo mostra que a transmissão está ligada; para parar, toque nele.")
                 .font(.footnote).foregroundStyle(.secondary)
             Text("Se o app não perceber que você aceitou, toque e segure a notificação do chamado › \"Aceitei esta corrida\". O app nunca aceita nem recusa corridas.")
                 .font(.footnote).foregroundStyle(.secondary)

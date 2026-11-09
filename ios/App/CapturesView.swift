@@ -125,9 +125,12 @@ struct CaptureDetail: View {
                     HStack {
                         Text(Br.money(record.fare)).font(.system(size: 30, weight: .bold).monospacedDigit())
                         Spacer()
-                        Pill(text: record.cls.shortLabel, color: record.cls.color)
+                        Pill(text: record.verdict ?? record.cls.shortLabel, color: record.cls.color)
                     }
                     Text(record.headline).font(.subheadline).foregroundStyle(record.cls.color)
+                    if let alert = record.alert {
+                        Text("⚠️ \(alert)").font(.footnote.weight(.semibold)).foregroundStyle(Palette.warning)
+                    }
                     HStack {
                         Stat(title: "R$/km", value: Br.decimal(record.revenuePerKm))
                         Stat(title: "R$/h", value: Br.decimal(record.revenuePerHour, 0))
@@ -139,9 +142,11 @@ struct CaptureDetail: View {
                     if let o = record.origin { Text("Embarque: \(o)").font(.caption).foregroundStyle(.secondary) }
                     if let d = record.destination { Text("Destino: \(d)").font(.caption).foregroundStyle(.secondary) }
                 }
-                ScreenshotImage(name: record.screenshot)
-                    .scaledToFit()
-                    .clipShape(RoundedRectangle(cornerRadius: 16))
+                if record.screenshot != nil {
+                    ScreenshotImage(name: record.screenshot)
+                        .scaledToFit()
+                        .clipShape(RoundedRectangle(cornerRadius: 16))
+                }
                 HStack {
                     if let s = record.screenshot {
                         ShareLink(item: SharedStore.screenshotURL(s)) {

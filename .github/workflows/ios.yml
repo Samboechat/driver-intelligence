@@ -45,6 +45,8 @@ jobs:
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
             build 2>&1 | tee build.log | grep -E "error:|warning: .*deprecated|BUILD" || true
           test -d build/Build/Products/Release-iphoneos/DriverIntelligence.app
+          test -d build/Build/Products/Release-iphoneos/DriverIntelligence.app/PlugIns/BroadcastExtension.appex
+          test -d build/Build/Products/Release-iphoneos/DriverIntelligence.app/PlugIns/LiveActivity.appex
 
       - name: Resumo de erros (anotações)
         if: failure()
@@ -63,6 +65,7 @@ jobs:
         run: |
           APP=build/Build/Products/Release-iphoneos/DriverIntelligence.app
           codesign -f -s - --entitlements BroadcastExtension/Extension.entitlements "$APP/PlugIns/BroadcastExtension.appex"
+          codesign -f -s - "$APP/PlugIns/LiveActivity.appex"
           codesign -f -s - --entitlements App/App.entitlements "$APP"
           rm -rf Payload && mkdir Payload && cp -R "$APP" Payload/
           zip -qry DriverIntelligence.ipa Payload

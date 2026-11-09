@@ -25,16 +25,26 @@ struct DriverSettings: Codable, Equatable {
     var notifyIncomplete: Bool = false
     var fastRecognition: Bool = false
 
-    /// Print de cada chamado (álbum "Driver Intelligence").
-    var saveScreenshots: Bool = true
+    /// Print de cada chamado (álbum "Driver Intelligence"). Desligado: nenhum quadro da tela é gravado.
+    var saveScreenshots: Bool = false
     /// Miniatura do print dentro da notificação.
-    var attachScreenshot: Bool = true
+    var attachScreenshot: Bool = false
     /// Detectar aceite/recusa e acompanhar a corrida.
     var autoTrack: Bool = true
     /// Registrar sozinho a corrida concluída, com tempos reais.
     var autoRegisterTrips: Bool = true
     /// Avisar o resumo ao fim de cada corrida.
     var notifyTripSummary: Bool = true
+
+    /// Matriz de aceite (Comfort/UberX, busca, nota, piso por hora e zonas de Sorocaba).
+    var useMatrix: Bool = true
+    var matrix = MatrixConfig()
+    /// Meta da semana (segunda a domingo).
+    var weeklyGoal = WeeklyGoal()
+    /// Dynamic Island / Atividade ao Vivo (experimental).
+    var liveActivity: Bool = true
+    /// Versão dos ajustes salvos (para migrar padrões).
+    var schema: Int = 2
 
     init() {}
 
@@ -67,6 +77,16 @@ struct DriverSettings: Codable, Equatable {
         autoTrack = v(.autoTrack, d.autoTrack)
         autoRegisterTrips = v(.autoRegisterTrips, d.autoRegisterTrips)
         notifyTripSummary = v(.notifyTripSummary, d.notifyTripSummary)
+        useMatrix = v(.useMatrix, d.useMatrix)
+        matrix = v(.matrix, d.matrix)
+        weeklyGoal = v(.weeklyGoal, d.weeklyGoal)
+        liveActivity = v(.liveActivity, d.liveActivity)
+        // Ajustes salvos antes da versão 2: os prints passam a ser opcionais e começam desligados.
+        if v(.schema, 1) < 2 {
+            saveScreenshots = false
+            attachScreenshot = false
+        }
+        schema = d.schema
     }
 
     var costs: CostProfile {
@@ -86,9 +106,13 @@ struct DriverSettings: Codable, Equatable {
             goals: goals,
             pickupTimeFactor: factors?.pickup ?? pickupTimeFactor,
             tripTimeFactor: factors?.trip ?? tripTimeFactor,
-            useRealisticTime: useRealisticTime
+            useRealisticTime: useRealisticTime,
+            matrix: useMatrix ? matrix : nil
         )
     }
+
+    /// Piso por hora mostrado na notificação quando a matriz está ligada.
+    var hourFloor: Double? { useMatrix ? matrix.hourFloor : nil }
 
     var context: AnalysisContext { context(factors: SharedStore.currentFactors(self)) }
 
@@ -126,9 +150,15 @@ struct OfferRecord: Codable, Identifiable, Equatable {
     var confidence: Double
     var outcome: String?
     var screenshot: String?
+    /// Matriz de aceite: veredito (ACEITAR/AVALIAR/RECUSAR), zona do destino, alerta e nota do passageiro.
+    var verdict: String?
+    var zone: String?
+    var alert: String?
+    var rating: Double?
 
     var cls: Classification { Classification(rawValue: classification) ?? .gray }
     var result: OfferOutcome? { outcome.flatMap(OfferOutcome.init(rawValue:)) }
+    var zoneKind: ZoneKind? { zone.flatMap(ZoneKind.init(rawValue:)) }
 
     init(_ a: OfferAnalysis, date: Date = Date(), screenshot: String? = nil) {
         fingerprint = a.fingerprint
@@ -149,6 +179,10 @@ struct OfferRecord: Codable, Identifiable, Equatable {
         headline = a.decision.headline
         confidence = a.confidence
         self.screenshot = screenshot
+        verdict = a.matrix?.label
+        zone = a.matrix.flatMap { $0.zone.kind == .neutral ? nil : $0.zone.kind.rawValue }
+        alert = a.matrix?.alert
+        rating = a.offer.passengerRating
     }
 }
 
@@ -275,6 +309,18 @@ enum SharedStore {
         set { save("samples", Array(newValue.suffix(200))) }
     }
 
+    /// Turnos (hodômetro e horas online). O mais recente primeiro.
+    static var shifts: [Shift] {
+        get { load("shifts", [Shift].self) ?? [] }
+        set { save("shifts", Array(newValue.prefix(400))) }
+    }
+
+    /// Último estado mostrado na Dynamic Island (a extensão grava; o app usa para reabrir a atividade).
+    static var liveState: RideActivityAttributes.ContentState? {
+        get { load("liveState", RideActivityAttributes.ContentState.self) }
+        set { if let newValue { save("liveState", newValue) } else { defaults.removeObject(forKey: "liveState") } }
+    }
+
     static var command: AppCommand? {
         get { load("command", AppCommand.self) }
         set { if let newValue { save("command", newValue) } else { defaults.removeObject(forKey: "command") } }
@@ -332,12 +378,12 @@ enum SharedStore {
         func n(_ v: Double?, _ d: Int = 2) -> String { v.map { Br.decimal($0, d).replacingOccurrences(of: ".", with: "") } ?? "" }
         let df = DateFormatter()
         df.dateFormat = "dd/MM/yyyy HH:mm"
-        var out = "\u{FEFF}tipo;data;valor;categoria;km;min_app;min_real;rs_km;rs_hora;lucro;classificacao;resultado\r\n"
+        var out = "\u{FEFF}tipo;data;valor;categoria;km;min_app;min_real;rs_km;rs_hora;lucro;classificacao;resultado;veredito;zona;destino\r\n"
         for t in trips {
-            out += "corrida;\(df.string(from: t.acceptedAt));\(n(t.fare));\(t.category ?? "");\(n(t.totalKm, 1));\(n(t.offeredMin, 0));\(n(t.totalMin, 0));\(n(t.fare.flatMap { f in t.totalKm.map { f / $0 } }));\(n(t.revenuePerHour));\(n(t.profit));\(t.cls.label);realizada\r\n"
+            out += "corrida;\(df.string(from: t.acceptedAt));\(n(t.fare));\(t.category ?? "");\(n(t.totalKm, 1));\(n(t.offeredMin, 0));\(n(t.totalMin, 0));\(n(t.fare.flatMap { f in t.totalKm.map { f / $0 } }));\(n(t.revenuePerHour));\(n(t.profit));\(t.cls.label);realizada;;;\r\n"
         }
         for o in history {
-            out += "oferta;\(df.string(from: o.date));\(n(o.fare));\(o.category ?? "");\(n(o.totalKm, 1));\(n(o.totalMin, 0));\(n(o.realisticMin, 0));\(n(o.revenuePerKm));\(n(o.revenuePerHour));\(n(o.profit));\(o.cls.label);\(o.result?.label ?? "")\r\n"
+            out += "oferta;\(df.string(from: o.date));\(n(o.fare));\(o.category ?? "");\(n(o.totalKm, 1));\(n(o.totalMin, 0));\(n(o.realisticMin, 0));\(n(o.revenuePerKm));\(n(o.revenuePerHour));\(n(o.profit));\(o.cls.label);\(o.result?.label ?? "");\(o.verdict ?? "");\(o.zoneKind?.label ?? "");\((o.destination ?? "").replacingOccurrences(of: ";", with: ","))\r\n"
         }
         return out
     }

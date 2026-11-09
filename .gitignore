@@ -21,3 +21,4 @@ ios/Payload/
 ios/*.ipa
 ios/App/Info.plist
 ios/BroadcastExtension/Info.plist
+ios/LiveActivity/Info.plist

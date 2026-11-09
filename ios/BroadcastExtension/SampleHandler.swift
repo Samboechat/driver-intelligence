@@ -10,7 +10,10 @@ import DriverCore
  * lê o texto no próprio iPhone (Vision), analisa a oferta e avisa por notificação.
  *
  * Além disso:
- *  - tira um print (JPEG reduzido) de cada chamado e o envia para o álbum "Driver Intelligence";
+ *  - classifica pela matriz de aceite (categoria, busca, nota, piso por hora e zonas de Sorocaba);
+ *  - atualiza a Atividade ao Vivo (Dynamic Island), quando o app a abriu;
+ *  - só se o motorista ligar nos Ajustes: guarda um print (JPEG reduzido) de cada chamado.
+ *    Com os prints desligados (padrão), cada quadro é lido na memória e descartado: nenhuma imagem é gravada;
  *  - entende se a oferta foi aceita, recusada ou ignorada pela tela seguinte;
  *  - mede o tempo real da corrida aceita e aprende o quanto o app costuma errar.
  *
@@ -42,6 +45,10 @@ final class SampleHandler: RPBroadcastSampleHandler {
     private var shots: [String: (name: String, confidence: Double)] = [:]
 
     private let minInterval: CFAbsoluteTime = 0.65
+    /// Dynamic Island: quando o último chamado esteve na tela (para voltar a "Buscando corridas").
+    private var liveShowingOffer = false
+    private var lastOfferSeen: CFAbsoluteTime = 0
+    private let liveOfferHold: CFAbsoluteTime = 20
 
     override func broadcastStarted(withSetupInfo setupInfo: [String: NSObject]?) {
         reloadSettings()
@@ -50,10 +57,13 @@ final class SampleHandler: RPBroadcastSampleHandler {
         Notifier.postInfo(
             "Driver Intelligence ativo",
             SharedStore.isShared
-                ? "Abra o Uber Driver. Cada chamado vira uma notificação com a análise e um print salvo no álbum."
+                ? (settings.saveScreenshots
+                   ? "Abra o Uber Driver. Cada chamado vira uma notificação com a análise e um print salvo no álbum."
+                   : "Abra o Uber Driver. Cada chamado vira uma notificação com a análise. Nenhuma imagem da tela é guardada.")
                 : "Ajustes do app não acessíveis (grupo do app indisponível); usando valores padrão.",
             id: "status"
         )
+        pushLive(.searching(offersToday: 0))
     }
 
     override func broadcastPaused() {
@@ -71,8 +81,11 @@ final class SampleHandler: RPBroadcastSampleHandler {
         status.tripPhase = nil
         status.screen = nil
         SharedStore.status = status
+        SharedStore.liveState = nil
+        if #available(iOS 16.2, *) { LiveActivityController.end() }
         Notifier.postInfo("Driver Intelligence desligado",
-                          "Leitura encerrada · \(status.offersNotified) chamados analisados, \(status.screenshotsSaved) prints.",
+                          "Leitura encerrada · \(status.offersNotified) chamados analisados"
+                              + (status.screenshotsSaved > 0 ? ", \(status.screenshotsSaved) prints." : "."),
                           id: "status")
     }
 
@@ -126,7 +139,11 @@ final class SampleHandler: RPBroadcastSampleHandler {
                 recentOffers[fp] = analysis
                 if recentOffers.count > 12 { recentOffers = [fp: analysis] }
             }
+            lastOfferSeen = now
             handleOffer(analysis, pixelBuffer: pixelBuffer, orientation: orientation, at: now)
+        } else if liveShowingOffer, now - lastOfferSeen > liveOfferHold {
+            liveShowingOffer = false
+            pushLive(.searching(offersToday: status.offersNotified))
         }
 
         let kind = ScreenClassifier.classify(frame, isOfferScreen: analysis != nil)
@@ -171,6 +188,18 @@ final class SampleHandler: RPBroadcastSampleHandler {
 
         Notifier.post(analysis, settings: settings, identifier: "offer-\(fp)",
                       screenshot: settings.attachScreenshot ? shotURL : nil)
+        liveShowingOffer = true
+        pushLive(.init(
+            phase: .offer,
+            verdict: analysis.matrix?.label ?? analysis.decision.classification.shortLabel,
+            classification: analysis.decision.classification.rawValue,
+            fare: analysis.offer.fare,
+            perKm: analysis.financial.revenuePerKm,
+            perHour: analysis.basis.revenuePerHour,
+            category: analysis.offer.category,
+            alert: analysis.matrix?.alert,
+            offersToday: status.offersNotified + (decision == .notify(fingerprint: fp) ? 1 : 0)
+        ))
 
         switch decision {
         case .notify:
@@ -322,6 +351,16 @@ final class SampleHandler: RPBroadcastSampleHandler {
 
     private func saveStatus() {
         SharedStore.status = status
+    }
+
+    // MARK: Dynamic Island
+
+    /// Grava o estado para o app e tenta atualizar a Atividade ao Vivo aberta por ele.
+    /// Experimental: o iOS pode não entregar a atualização vinda da extensão; a notificação continua sendo o canal principal.
+    private func pushLive(_ state: RideActivityAttributes.ContentState) {
+        SharedStore.liveState = state
+        guard settings.liveActivity else { return }
+        if #available(iOS 16.2, *) { LiveActivityController.update(state) }
     }
 
     // MARK: Imagem

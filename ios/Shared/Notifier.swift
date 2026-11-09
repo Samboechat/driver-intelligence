@@ -23,7 +23,7 @@ enum Notifier {
     }
 
     static func post(_ a: OfferAnalysis, settings: DriverSettings, identifier: String, screenshot: URL? = nil) {
-        let c = NotificationFormatter.format(a, goals: settings.goals)
+        let c = NotificationFormatter.format(a, goals: settings.goals, hourFloor: settings.hourFloor)
         let content = UNMutableNotificationContent()
         content.title = c.title
         content.body = c.body
@@ -78,7 +78,8 @@ enum Notifier {
     /// Notificação de exemplo, para conferir se elas aparecem (e passam pelo Foco).
     static func sendTest(settings: DriverSettings) {
         let a = OfferAnalyzer().analyze(
-            offer: OfferData(fare: 19.20, pickupDistanceKm: 1.2, tripDistanceKm: 7.7, pickupTimeMin: 4, tripTimeMin: 20, category: "UberX"),
+            offer: OfferData(fare: 19.20, pickupDistanceKm: 1.2, tripDistanceKm: 7.7, pickupTimeMin: 4, tripTimeMin: 14, category: "UberX",
+                             destination: "Parque Campolim, Sorocaba", passengerRating: 4.92),
             context: settings.context
         )
         post(a, settings: settings, identifier: "teste-\(Date().timeIntervalSince1970)")

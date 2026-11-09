@@ -26,7 +26,8 @@ final class Permissions: ObservableObject {
     /// Pede tudo o que ainda não foi decidido (chamado ao abrir o app).
     func requestAll() async {
         await requestNotifications()
-        await requestPhotos()
+        // Fotos só é pedido com os prints ligados nos Ajustes.
+        if SharedStore.settings.saveScreenshots { await requestPhotos() }
         await refresh()
     }
 

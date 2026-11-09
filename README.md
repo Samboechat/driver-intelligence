@@ -84,3 +84,22 @@ app/src/main/java/com/driverintelligence/
 - [Instalação e compilação](docs/INSTALACAO.md)
 - [Privacidade e dados armazenados](docs/PRIVACIDADE.md)
 - [Relatório de testes](docs/RELATORIO_DE_TESTES.md)
+
+## iPhone (pasta `ios/`)
+
+Versão iOS 0.3, instalada por IPA (ESign/AltStore). A leitura usa a transmissão de tela do iOS e o resultado chega por notificação.
+
+- **Matriz de aceite** (`DriverCore/AcceptanceMatrix.swift`): ACEITAR / AVALIAR / RECUSAR por categoria.
+  R$/km = valor ÷ (busca + viagem). CPK R$ 0,50. Piso R$ 42/h (recusa abaixo), ideal R$ 54/h.
+  Comfort: aceita ≥ 2,30 · amarelo 2,00–2,29 · busca 5–8 km · nota ≥ 4,80.
+  UberX/99: aceita ≥ 2,10 · amarelo 1,85–2,09 · busca 3–6 km · nota ≥ 4,85.
+  A busca máxima cresce da curta (viagem até 5 km) à longa (20 km ou mais).
+- **Zonas de Sorocaba** (`DriverCore/SorocabaZone.swift`): zona quente aprova o amarelo; periferia exige R$ 2,20/km e
+  mostra "Volta Vazia - Ligar Direcionamento"; intermunicipal recusa abaixo do mínimo da cidade
+  (Itu 128 · Salto 168 · Campinas/Viracopos 360 · Jundiaí 380 · SP Capital 422 · Guarulhos 530).
+  Tudo editável em Ajustes › Matriz de aceite.
+- **Painel**: meta da semana (R$ 2.820 e 56 h online), turno com hodômetro (km rodados, km morto, R$/km real) e decisões do dia.
+- **Privacidade**: cada quadro é lido na memória e descartado. Prints são opcionais e começam desligados.
+- **Dynamic Island** (experimental): aberta pelo app; a atualização em segundo plano depende do iOS.
+
+Testes do núcleo: `cd ios/DriverCore && swift test`. O IPA sai do workflow `iOS` (GitHub Actions), sem assinatura.

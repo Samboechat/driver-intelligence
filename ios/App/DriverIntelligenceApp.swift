@@ -48,16 +48,23 @@ struct RootView: View {
     @StateObject private var perms = Permissions.shared
     @AppStorage("onboarded") private var onboarded = false
     @State private var tab = 0
+    @State private var showPrints = SharedStore.settings.saveScreenshots
     private let photoTimer = Timer.publish(every: 20, on: .main, in: .common).autoconnect()
+    private let liveTimer = Timer.publish(every: 3, on: .main, in: .common).autoconnect()
+    @State private var lastLiveState: RideActivityAttributes.ContentState?
 
     var body: some View {
         TabView(selection: $tab) {
             HomeView().tag(0).tabItem { Label("Início", systemImage: "bolt.fill") }
-            CapturesView().tag(1).tabItem { Label("Prints", systemImage: "photo.on.rectangle.angled") }
+            DashboardView().tag(1).tabItem { Label("Painel", systemImage: "chart.pie.fill") }
             HistoryView().tag(2).tabItem { Label("Histórico", systemImage: "clock.arrow.circlepath") }
-            SimulatorView().tag(3).tabItem { Label("Simular", systemImage: "function") }
+            // A aba de prints só existe com os prints ligados nos Ajustes.
+            if showPrints {
+                CapturesView().tag(3).tabItem { Label("Prints", systemImage: "photo.on.rectangle.angled") }
+            }
             SettingsView().tag(4).tabItem { Label("Ajustes", systemImage: "slider.horizontal.3") }
         }
+        .onChange(of: tab) { _ in showPrints = SharedStore.settings.saveScreenshots }
         .environmentObject(perms)
         .fullScreenCover(isPresented: Binding(get: { !onboarded }, set: { if !$0 { onboarded = true } })) {
             OnboardingView { onboarded = true }
@@ -68,17 +75,40 @@ struct RootView: View {
             // Ao entrar no app: pede tudo o que ainda não foi decidido.
             await perms.requestAll()
             flushPhotos()
+            syncLiveActivity()
         }
         .onChange(of: phase) { p in
             guard p == .active else { return }
             Task { await perms.refresh() }
             flushPhotos()
+            showPrints = SharedStore.settings.saveScreenshots
+            syncLiveActivity()
         }
         .onReceive(photoTimer) { _ in flushPhotos() }
+        .onReceive(liveTimer) { _ in if phase == .active { syncLiveActivity() } }
     }
 
     private func flushPhotos() {
+        guard SharedStore.settings.saveScreenshots || !PhotoAlbum.notDetermined else { return }
         DispatchQueue.global(qos: .utility).async { _ = PhotoAlbum.flushPending() }
+    }
+
+    /// Com a leitura ligada, abre (ou atualiza) a Dynamic Island; com ela desligada, encerra.
+    private func syncLiveActivity() {
+        guard #available(iOS 16.2, *) else { return }
+        let settings = SharedStore.settings
+        let status = SharedStore.status
+        let live = status.running && (status.lastFrameAt.map { Date().timeIntervalSince($0) < 30 } ?? true)
+        guard settings.liveActivity && live else {
+            if LiveActivityController.isRunning { LiveActivityController.end() }
+            lastLiveState = nil
+            return
+        }
+        // Só mexe na atividade quando o estado muda (a extensão grava o último chamado no armazenamento compartilhado).
+        let state = SharedStore.liveState ?? .searching(offersToday: status.offersNotified)
+        guard !LiveActivityController.isRunning || state != lastLiveState else { return }
+        lastLiveState = state
+        LiveActivityController.start(state)
     }
 }
 

@@ -13,7 +13,7 @@ struct OnboardingView: View {
             TabView(selection: $page) {
                 welcome.tag(0)
                 notifications.tag(1)
-                photos.tag(2)
+                if printsOn { photos.tag(2) }
                 focus.tag(3)
                 broadcast.tag(4)
             }
@@ -27,12 +27,15 @@ struct OnboardingView: View {
         }
     }
 
-    private func next() { withAnimation { page += 1 } }
+    /// A página de Fotos só entra com os prints ligados nos Ajustes.
+    private var printsOn: Bool { SharedStore.settings.saveScreenshots }
+
+    private func next() { withAnimation { page += (page == 1 && !printsOn) ? 2 : 1 } }
 
     private var welcome: some View {
         OnboardPage(icon: "bolt.car.fill", color: Palette.brand,
                     title: "Driver Intelligence",
-                    text: "Enquanto você usa o Uber Driver, o app lê cada chamado na tela, calcula R$/km, R$/hora e lucro com os custos do seu carro e te avisa por notificação em cerca de 2 segundos.\n\nTambém salva um print de cada chamado no seu álbum de Fotos, entende se você aceitou ou recusou e mede o tempo real das corridas.") {
+                    text: "Enquanto você usa o Uber Driver, o app lê cada chamado na tela, calcula R$/km, R$/hora e lucro e te avisa por notificação em cerca de 2 segundos se é para aceitar, avaliar ou recusar.\n\nTambém entende se você aceitou ou recusou, mede o tempo real das corridas e acompanha a meta da semana. Nenhuma imagem da tela é guardada.") {
             PrimaryButton("Começar", action: next)
         }
     }

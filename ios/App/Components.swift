@@ -111,6 +111,7 @@ struct OfferRow: View {
             VStack(alignment: .trailing, spacing: 2) {
                 Text(record.revenuePerKm.map { "\(Br.decimal($0))/km" } ?? "—").font(.subheadline.monospacedDigit()).foregroundStyle(record.cls.color)
                 HStack(spacing: 4) {
+                    if record.alert != nil { Image(systemName: "exclamationmark.triangle.fill").font(.caption2).foregroundStyle(Palette.warning) }
                     if record.screenshot != nil { Image(systemName: "photo").font(.caption2) }
                     if let r = record.result { Text(r.label).font(.caption2.weight(.semibold)) }
                     Text(record.date, style: .time).font(.caption)

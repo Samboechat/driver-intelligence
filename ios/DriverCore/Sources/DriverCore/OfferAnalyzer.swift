@@ -31,9 +31,13 @@ public struct AnalysisContext: Equatable, Codable, Sendable {
     public var pickupTimeFactor: Double
     public var tripTimeFactor: Double
     public var useRealisticTime: Bool
+    /// Matriz de aceite (categoria, busca, nota, hora e zonas). nil = classificação por pontuação.
+    public var matrix: MatrixConfig?
 
     public init(costs: CostProfile = .empty, goals: Goals = Goals(), scoring: ScoringConfig = ScoringConfig(),
-                pickupTimeFactor: Double = 1.35, tripTimeFactor: Double = 1.15, useRealisticTime: Bool = true) {
+                pickupTimeFactor: Double = 1.35, tripTimeFactor: Double = 1.15, useRealisticTime: Bool = true,
+                matrix: MatrixConfig? = nil) {
+        self.matrix = matrix
         self.costs = costs
         self.goals = goals
         self.scoring = scoring
@@ -52,6 +56,8 @@ public struct OfferAnalysis: Equatable, Sendable {
     public var confidence: Double
     public var fingerprint: String?
     public var fareTarget: FareTarget?
+    /// Veredito da matriz de aceite (nil quando ela está desligada ou faltam dados).
+    public var matrix: MatrixVerdict?
 
     /// Resultado usado na classificação.
     public var basis: FinancialResult { realistic ?? financial }
@@ -73,13 +79,15 @@ public struct OfferAnalyzer: Sendable {
 
     public func analyze(offer: OfferData, confidence: Double = 1, fromOcr: Bool = false, context ctx: AnalysisContext) -> OfferAnalysis {
         let v = OfferValidator.validate(offer)
-        let fin = financial.calculate(offer, costs: ctx.costs)
+        // Com a matriz ligada, o lucro usa só o CPK dela.
+        let costs = ctx.matrix?.costs ?? ctx.costs
+        let fin = financial.calculate(offer, costs: costs)
         var real: FinancialResult?
         if ctx.useRealisticTime, let p = offer.pickupTimeMin, let t = offer.tripTimeMin {
             var adjusted = offer
             adjusted.pickupTimeMin = p * ctx.pickupTimeFactor
             adjusted.tripTimeMin = t * ctx.tripTimeFactor
-            real = financial.calculate(adjusted, costs: ctx.costs)
+            real = financial.calculate(adjusted, costs: costs)
         }
         let basis = real ?? fin
         let conf = fromOcr ? confidence * v.factor : 1
@@ -90,6 +98,19 @@ public struct OfferAnalyzer: Sendable {
         } else {
             dec = decision.decide(basis, goals: ctx.goals, config: ctx.scoring, recognitionConfidence: fromOcr ? conf : nil)
         }
+        var target = v.status == .invalid ? nil : FareAdvisor.target(basis, goals: ctx.goals)
+        var verdict: MatrixVerdict?
+        let readable = !fromOcr || conf >= ctx.scoring.minRecognitionConfidence
+        if let m = ctx.matrix, v.status != .invalid, readable,
+           let mv = AcceptanceMatrix().evaluate(basis, offer: offer, config: m) {
+            verdict = mv
+            dec = Decision(
+                classification: mv.classification, score: nil, headline: mv.headline,
+                reasons: (mv.refusals + mv.cautions + [mv.alert].compactMap { $0 }).map(\.capitalizedFirst),
+                metricScores: [], isPartial: basis.missingInputs.contains(.pickupTime) || basis.missingInputs.contains(.tripTime)
+            )
+            target = Self.matrixTarget(basis, verdict: mv, config: m)
+        }
         return OfferAnalysis(
             offer: offer,
             financial: fin,
@@ -97,8 +118,28 @@ public struct OfferAnalyzer: Sendable {
             decision: dec,
             confidence: conf,
             fingerprint: Self.fingerprint(offer),
-            fareTarget: v.status == .invalid ? nil : FareAdvisor.target(basis, goals: ctx.goals)
+            fareTarget: target,
+            matrix: verdict
         )
+    }
+
+    /// Valor mínimo para a matriz dar "aceitar": R$/km exigido, hora ideal e o mínimo da cidade.
+    static func matrixTarget(_ r: FinancialResult, verdict v: MatrixVerdict, config m: MatrixConfig) -> FareTarget? {
+        guard let km = r.totalDistanceKm, km > 0 else { return nil }
+        var c: [(Double, String)] = []
+        let intercityMin = v.zone.kind == .intercity ? v.zone.minimumFare : nil
+        if let intercityMin {
+            c.append((intercityMin, "mínimo intermunicipal"))
+        } else {
+            c.append((v.requiredPerKm * km, "valor por km"))
+        }
+        if let minutes = r.totalTimeMin, minutes > 0 {
+            let hour = v.zone.kind == .hot ? m.hourFloor : m.hourIdeal
+            c.append((hour * minutes / 60, "valor por hora"))
+        }
+        guard let best = c.max(by: { $0.0 < $1.0 }) else { return nil }
+        return FareTarget(minimumFare: best.0, bindingGoal: best.1, breakEven: r.costPerKm.map { $0 * km },
+                          gap: r.grossRevenue.map { $0 - best.0 })
     }
 
     /// Identidade estável da oferta (centavos | 100 m | 100 m | minutos).
@@ -155,7 +196,8 @@ public enum NotificationFormatter {
         public var body: String
     }
 
-    public static func format(_ a: OfferAnalysis, goals: Goals) -> Content {
+    /// `hourFloor`: piso por hora da matriz de aceite (quando ligada).
+    public static func format(_ a: OfferAnalysis, goals: Goals, hourFloor: Double? = nil) -> Content {
         let f = a.financial
         let b = a.basis
         let d = a.decision
@@ -166,14 +208,15 @@ public enum NotificationFormatter {
             case .none: return "⚪️"
             }
         }
-        let kmOk = f.revenuePerKm.map { $0 >= goals.minRevenuePerKm }
-        let hourOk = b.revenuePerHour.map { $0 >= goals.minRevenuePerHour }
+        let mv = a.matrix
+        let kmOk = f.revenuePerKm.map { $0 >= (mv?.requiredPerKm ?? goals.minRevenuePerKm) }
+        let hourOk = b.revenuePerHour.map { $0 >= (mv != nil ? hourFloor ?? goals.minRevenuePerHour : goals.minRevenuePerHour) }
 
         var title = "\(d.classification.dot)\(Br.money(f.grossRevenue))"
         if let rk = f.revenuePerKm { title += "  \(dot(kmOk))\(Br.decimal(rk))/km" }
         if let rh = b.revenuePerHour { title += "  \(dot(hourOk))\(Br.decimal(rh, 0))/h" }
 
-        var line1: [String] = [d.classification.shortLabel]
+        var line1: [String] = [mv?.label ?? d.classification.shortLabel]
         if let p = f.operatingProfit {
             let margin = f.operatingMargin.map { " (\(Br.percent($0)))" } ?? ""
             line1.append("Lucro: \(Br.money(p))\(margin)")
@@ -196,7 +239,14 @@ public enum NotificationFormatter {
 
         var body = line1.joined(separator: " · ")
         if !line2.isEmpty { body += "\n" + line2.joined(separator: " ") }
-        if d.classification == .gray || d.classification == .red { body += "\n" + d.headline }
+        if d.classification == .gray || d.classification == .red || (mv != nil && d.classification == .yellow) { body += "\n" + d.headline }
+        if let mv {
+            var extra: [String] = []
+            if let alert = mv.alert { extra.append("⚠️ \(alert)") }
+            if mv.zone.kind == .hot { extra.append("🔥 Zona quente") }
+            if let rating = a.offer.passengerRating { extra.append("★ \(Br.decimal(rating))") }
+            if !extra.isEmpty { body += "\n" + extra.joined(separator: " · ") }
+        }
         return Content(title: title, body: body)
     }
 }

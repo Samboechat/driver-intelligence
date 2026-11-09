@@ -9,11 +9,16 @@ struct SimulatorView: View {
     @State private var pickupMin: Double? = nil
     @State private var tripKm: Double? = nil
     @State private var tripMin: Double? = nil
+    @State private var comfort = true
+    @State private var destination = ""
+    @State private var rating: Double? = nil
+    @Environment(\.dismiss) private var dismiss
 
     private var analysis: OfferAnalysis? {
         guard fare != nil || tripKm != nil else { return nil }
         return OfferAnalyzer().analyze(
-            offer: OfferData(fare: fare, pickupDistanceKm: pickupKm, tripDistanceKm: tripKm, pickupTimeMin: pickupMin, tripTimeMin: tripMin),
+            offer: OfferData(fare: fare, pickupDistanceKm: pickupKm, tripDistanceKm: tripKm, pickupTimeMin: pickupMin, tripTimeMin: tripMin,
+                             category: comfort ? "Comfort" : "UberX", destination: destination.isEmpty ? nil : destination, passengerRating: rating),
             context: SharedStore.settings.context
         )
     }
@@ -28,6 +33,16 @@ struct SimulatorView: View {
                     NumberField(title: "Viagem", value: $tripKm, suffix: "km")
                     NumberField(title: "Tempo de viagem", value: $tripMin, suffix: "min")
                 }
+                Section("Matriz de aceite") {
+                    Picker("Categoria", selection: $comfort) {
+                        Text("Comfort").tag(true)
+                        Text("UberX / 99").tag(false)
+                    }
+                    .pickerStyle(.segmented)
+                    TextField("Destino (bairro, cidade)", text: $destination)
+                        .autocorrectionDisabled()
+                    NumberField(title: "Nota do passageiro", value: $rating, suffix: "★")
+                }
                 if let a = analysis {
                     Section("Resultado") { AnalysisSummary(a: a) }
                 }
@@ -35,6 +50,10 @@ struct SimulatorView: View {
             .scrollContentBackground(.hidden)
             .background(Palette.background.ignoresSafeArea())
             .navigationTitle("Simular oferta")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) { Button("Fechar") { dismiss() } }
+            }
         }
     }
 }
@@ -49,9 +68,14 @@ struct AnalysisSummary: View {
             HStack {
                 Text(Br.money(f.grossRevenue)).font(.system(size: 30, weight: .bold).monospacedDigit())
                 Spacer()
-                Pill(text: d.classification.shortLabel, color: d.classification.color)
+                Pill(text: a.matrix?.label ?? d.classification.shortLabel, color: d.classification.color)
             }
             Text(d.headline).font(.subheadline).foregroundStyle(d.classification == .gray ? .secondary : d.classification.color)
+            if let mv = a.matrix {
+                if let alert = mv.alert { Text("⚠️ \(alert)").font(.footnote.weight(.semibold)).foregroundStyle(Palette.warning) }
+                Text("\(mv.rideClass.label) · \(mv.zone.kind.label) · busca máx. \(Br.km(mv.pickupLimitKm))")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
             HStack {
                 Stat(title: "R$/km", value: Br.decimal(f.revenuePerKm))
                 Stat(title: a.realistic != nil ? "R$/h real" : "R$/h", value: Br.decimal(a.basis.revenuePerHour, 0))
@@ -61,11 +85,11 @@ struct AnalysisSummary: View {
                 Text("App diz \(Br.minutes(shown)) · na prática ~\(Br.minutes(real))").font(.footnote).foregroundStyle(.secondary)
             }
             if let t = a.fareTarget, let gap = t.gap {
-                Text(gap >= 0 ? "\(Br.money(gap)) acima do mínimo das suas metas" : "Valor justo: \(Br.money(t.minimumFare)) · faltam \(Br.money(-gap))")
+                Text(gap >= 0 ? "\(Br.money(gap)) acima do mínimo para aceitar" : "Valor justo: \(Br.money(t.minimumFare)) · faltam \(Br.money(-gap))")
                     .font(.footnote.weight(.medium))
                     .foregroundStyle(gap >= 0 ? Palette.positive : Palette.warning)
             }
-            if f.isCostEstimatePartial {
+            if f.isCostEstimatePartial, a.matrix == nil {
                 Text("Estimativa parcial: configure os custos do carro em Ajustes.").font(.caption).foregroundStyle(.secondary)
             }
         }
@@ -205,6 +229,25 @@ struct SettingsView: View {
         NavigationStack {
             Form {
                 Section {
+                    NavigationLink {
+                        MatrixSettingsView(s: $s)
+                    } label: {
+                        HStack {
+                            Text("Matriz de aceite")
+                            Spacer()
+                            Text(s.useMatrix ? "Ligada · CPK \(Br.money(s.matrix.costPerKm))" : "Desligada").foregroundStyle(.secondary)
+                        }
+                    }
+                    NumberField(title: "Meta da semana", value: $s.weeklyGoal.revenue.optional, suffix: "R$")
+                    NumberField(title: "Horas online na semana", value: $s.weeklyGoal.hoursOnline.optional, suffix: "h")
+                } header: {
+                    Text("Regras e metas")
+                } footer: {
+                    Text(s.useMatrix
+                         ? "Com a matriz ligada, as seções Veículo e Metas por corrida abaixo ficam sem efeito na classificação."
+                         : "Com a matriz desligada, a classificação usa as metas por corrida e os custos do veículo abaixo.")
+                }
+                Section {
                     NumberField(title: "Consumo", value: $s.consumptionKmPerLiter, suffix: "km/L")
                     NumberField(title: "Preço do combustível", value: $s.fuelPrice, suffix: "R$/L")
                     NumberField(title: "Outros custos", value: $s.otherCostPerKm, suffix: "R$/km")
@@ -251,7 +294,12 @@ struct SettingsView: View {
                 } header: {
                     Text("Prints")
                 } footer: {
-                    Text("Os prints vão para o álbum \"Driver Intelligence\" do app Fotos e ficam na aba Prints.")
+                    Text("Desligado (padrão): cada quadro é lido na memória e descartado; nenhuma imagem da tela é guardada. Ligado: os prints vão para o álbum \"Driver Intelligence\" do app Fotos e aparece a aba Prints.")
+                }
+                Section {
+                    Toggle("Dynamic Island (experimental)", isOn: $s.liveActivity)
+                } footer: {
+                    Text("Mostra \"Buscando corridas…\" e o veredito de cada chamado na Dynamic Island e na tela bloqueada. Precisa ser aberta pelo app (aba Início) e o iOS pode não atualizá-la com o app em segundo plano; a notificação continua sendo o aviso principal.")
                 }
                 Section {
                     NumberField(title: "Meta diária", value: $s.dailyGoal, suffix: "R$")
@@ -265,14 +313,17 @@ struct SettingsView: View {
                     Text("O app mede quanto cada corrida aceita realmente demora e, depois de 5 corridas, passa a corrigir o tempo das ofertas pelo seu histórico em cada horário.")
                 }
                 Section {
-                    Text("Processamento 100% no iPhone. Prints e análises ficam só no aparelho; nada é enviado para a internet.")
+                    Text("Processamento 100% no iPhone. As análises ficam só no aparelho e nada é enviado para a internet.")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
             }
             .scrollContentBackground(.hidden)
             .background(Palette.background.ignoresSafeArea())
             .navigationTitle("Ajustes")
-            .onChange(of: s) { new in SharedStore.settings = new }
+            .onChange(of: s) { new in
+                SharedStore.settings = new
+                if new.saveScreenshots, PhotoAlbum.notDetermined { Task { await Permissions.shared.requestPhotos() } }
+            }
         }
     }
 }
