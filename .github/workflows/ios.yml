@@ -13,7 +13,7 @@ concurrency:
 jobs:
   ipa:
     name: Testes + IPA
-    runs-on: macos-14
+    runs-on: macos-latest
     timeout-minutes: 45
     permissions:
       contents: write
