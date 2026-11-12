@@ -16,14 +16,14 @@ enum LiveActivityController {
 
     /// `expand`: abre a ilha por alguns segundos (em silêncio; o som é o da notificação).
     static func update(_ state: RideActivityAttributes.ContentState, expand: Bool = false) {
-        let content = content(state)
+        let body = Self.content(state)
         for activity in Activity<RideActivityAttributes>.activities {
             Task {
                 if expand {
-                    await activity.update(content, alertConfiguration: AlertConfiguration(
+                    await activity.update(body, alertConfiguration: AlertConfiguration(
                         title: "\(state.verdict)", body: "Novo chamado", sound: .named("di-silencio.wav")))
                 } else {
-                    await activity.update(content)
+                    await activity.update(body)
                 }
             }
         }

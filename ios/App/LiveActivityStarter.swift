@@ -15,7 +15,7 @@ extension LiveActivityController {
         do {
             _ = try Activity<RideActivityAttributes>.request(
                 attributes: RideActivityAttributes(),
-                content: content(state),
+                content: Self.content(state),
                 pushType: nil
             )
             return nil
