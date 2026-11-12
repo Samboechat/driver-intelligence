@@ -5,20 +5,30 @@ on:
     branches: [ main ]
     paths: [ "ios/**", ".github/workflows/ios.yml" ]
   workflow_dispatch:
+    inputs:
+      runner:
+        description: "Servidor de build (use outro quando o padrão estiver sem vaga)"
+        default: macos-latest
 
 concurrency:
-  group: ios-${{ github.ref }}
+  group: ios-${{ github.ref }}-${{ github.event.inputs.runner || 'padrao' }}
   cancel-in-progress: true
 
 jobs:
   ipa:
     name: Testes + IPA
-    runs-on: macos-latest
+    runs-on: ${{ github.event.inputs.runner || 'macos-latest' }}
     timeout-minutes: 45
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v4
+
+      - name: Usar o Xcode mais novo instalado
+        run: |
+          XC=$(ls -d /Applications/Xcode_26*.app 2>/dev/null | sort -V | tail -1)
+          if [ -n "$XC" ]; then sudo xcode-select -s "$XC"; fi
+          xcodebuild -version
 
       - name: Testes do núcleo (Swift)
         working-directory: ios/DriverCore
