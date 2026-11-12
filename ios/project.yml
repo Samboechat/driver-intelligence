@@ -14,8 +14,8 @@ packages:
 settings:
   base:
     SWIFT_VERSION: "5.0"
-    MARKETING_VERSION: "0.4.0"
-    CURRENT_PROJECT_VERSION: "4"
+    MARKETING_VERSION: "0.5.0"
+    CURRENT_PROJECT_VERSION: "5"
     DEVELOPMENT_TEAM: ""
     CODE_SIGN_STYLE: Automatic
     TARGETED_DEVICE_FAMILY: "1"
@@ -52,6 +52,9 @@ targets:
         UIUserInterfaceStyle: Dark
         ITSAppUsesNonExemptEncryption: false
         NSSupportsLiveActivities: true
+        NSSupportsLiveActivitiesFrequentUpdates: true
+        UIBackgroundModes: [location]
+        NSLocationWhenInUseUsageDescription: Para medir os km que o carro roda no turno e manter a Dynamic Island atualizada enquanto você usa o Uber. A localização fica só no aparelho.
         NSPhotoLibraryAddUsageDescription: Para salvar o print de cada chamado no álbum Driver Intelligence.
         NSPhotoLibraryUsageDescription: Para organizar os prints dos chamados no álbum Driver Intelligence.
 

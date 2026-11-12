@@ -11,6 +11,8 @@ struct DashboardView: View {
     @State private var odometerStart = ""
     @State private var odometerEnd = ""
     @State private var confirmDelete: Shift?
+    @EnvironmentObject var perms: Permissions
+    @ObservedObject private var gps = LocationService.shared
     private let timer = Timer.publish(every: 5, on: .main, in: .common).autoconnect()
 
     private var week: DateInterval { WeekMath.week(containing: now) }
@@ -26,6 +28,7 @@ struct DashboardView: View {
                 VStack(spacing: 14) {
                     weekCard
                     shiftCard
+                    mileageCard
                     decisionsCard
                     if !shifts.filter({ !$0.isOpen }).isEmpty { shiftsCard }
                 }
@@ -40,8 +43,8 @@ struct DashboardView: View {
         .confirmationDialog("Apagar este turno?", isPresented: Binding(get: { confirmDelete != nil }, set: { if !$0 { confirmDelete = nil } }), titleVisibility: .visible) {
             Button("Apagar turno", role: .destructive) {
                 if let s = confirmDelete {
-                    shifts.removeAll { $0.id == s.id }
-                    SharedStore.shifts = shifts
+                    SharedStore.updateShifts { $0.removeAll { $0.id == s.id } }
+                    reload()
                 }
                 confirmDelete = nil
             }
@@ -54,6 +57,8 @@ struct DashboardView: View {
         history = SharedStore.history
         shifts = SharedStore.shifts
         now = Date()
+        // Mostra o km inicial já informado no turno aberto.
+        if odometerStart.isEmpty, let start = shifts.first(where: \.isOpen)?.odometerStart { odometerStart = Br.decimal(start, 0) }
     }
 
     // MARK: Meta da semana
@@ -115,20 +120,30 @@ struct DashboardView: View {
         Card {
             HStack {
                 Image(systemName: "gauge.with.dots.needle.67percent").foregroundStyle(Palette.brand)
-                Text("Turno e hodômetro").font(.headline)
+                Text("Turno").font(.headline)
                 Spacer()
                 if let s = openShift { Text(s.start, style: .timer).font(.headline.monospacedDigit()).foregroundStyle(Palette.positive) }
             }
             if let s = openShift {
                 let earned = revenue(in: s)
+                let km = gps.isTracking || gps.shiftKm > 0 ? gps.shiftKm : (s.gpsKm ?? 0)
                 HStack {
                     Stat(title: "Início", value: timeText(s.start))
-                    Stat(title: "Km inicial", value: s.odometerStart.map { Br.decimal($0, 0) } ?? "—")
+                    Stat(title: "Km pelo GPS", value: gpsOn ? Br.decimal(km, 1) : "—", color: gpsOn ? .primary : .secondary)
                     Stat(title: "Ganho", value: Br.money(earned))
                 }
+                if km > 0.5 {
+                    Text("Até agora: \(Br.decimal(earned / km)) por km rodado · custo estimado \(Br.money(km * settings.matrix.costPerKm))")
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
+                gpsHint
+                OdometerField(title: "Km inicial do painel", text: $odometerStart)
                 OdometerField(title: "Km final do painel", text: $odometerEnd)
-                if let end = Self.parse(odometerEnd), let start = s.odometerStart, end < start {
-                    Text("O km final é menor que o inicial (\(Br.decimal(start, 0))).").font(.caption).foregroundStyle(Palette.warning)
+                if let end = Self.parse(odometerEnd), let start = Self.parse(odometerStart), end < start {
+                    Text("O km final é menor que o inicial.").font(.caption).foregroundStyle(Palette.warning)
+                } else {
+                    Text("O painel do carro é opcional: quando preenchido, ele vale no lugar do GPS.")
+                        .font(.caption).foregroundStyle(.secondary)
                 }
                 Button {
                     closeShift(s)
@@ -138,15 +153,17 @@ struct DashboardView: View {
                 .buttonStyle(.borderedProminent)
                 .tint(Palette.negative)
             } else {
-                Text("Informe o km do painel ao começar e ao terminar. O app calcula os km rodados, o km morto e o ganho por km de verdade.")
+                Text(settings.autoShift
+                     ? "O turno abre sozinho quando você liga a leitura. O GPS conta os km rodados, e o app calcula o km morto e o ganho por km de verdade."
+                     : "Inicie o turno ao começar a rodar. O GPS conta os km rodados, e o app calcula o km morto e o ganho por km de verdade.")
                     .font(.footnote).foregroundStyle(.secondary)
-                OdometerField(title: "Km inicial do painel", text: $odometerStart)
+                gpsHint
+                OdometerField(title: "Km inicial do painel (opcional)", text: $odometerStart)
                 Button {
-                    let shift = Shift(start: Date(), odometerStart: Self.parse(odometerStart))
-                    shifts.insert(shift, at: 0)
-                    SharedStore.shifts = shifts
-                    odometerStart = ""
+                    SharedStore.updateShifts { $0.insert(Shift(start: Date(), odometerStart: Self.parse(odometerStart)), at: 0) }
                     odometerEnd = ""
+                    AppSync.shared.pull()
+                    reload()
                 } label: {
                     Text("Iniciar turno").font(.headline).frame(maxWidth: .infinity, minHeight: 46)
                 }
@@ -155,12 +172,72 @@ struct DashboardView: View {
         }
     }
 
+    private var gpsOn: Bool { settings.gpsTracking && gps.authorized }
+
+    /// Explica o que falta para o GPS contar os km.
+    @ViewBuilder private var gpsHint: some View {
+        if !settings.gpsTracking {
+            Text("GPS desligado nos Ajustes: os km só entram pelo painel do carro.").font(.caption).foregroundStyle(.secondary)
+        } else if gps.canAsk {
+            Button("Permitir localização para contar os km") { gps.requestPermission() }
+                .buttonStyle(.bordered).controlSize(.small)
+        } else if !gps.authorized {
+            Button("Localização negada. Abrir Ajustes") { perms.openAppSettings() }
+                .buttonStyle(.bordered).controlSize(.small)
+        }
+    }
+
     private func closeShift(_ s: Shift) {
-        guard let i = shifts.firstIndex(where: { $0.id == s.id }) else { return }
-        shifts[i].end = Date()
-        if let end = Self.parse(odometerEnd), end >= (s.odometerStart ?? 0) { shifts[i].odometerEnd = end }
-        SharedStore.shifts = shifts
+        // Grava os últimos km do GPS antes de fechar.
+        gps.persist(force: true)
+        let start = Self.parse(odometerStart)
+        let end = Self.parse(odometerEnd)
+        SharedStore.updateShifts { shifts in
+            guard let i = shifts.firstIndex(where: { $0.id == s.id }) else { return }
+            shifts[i].end = Date()
+            if let start { shifts[i].odometerStart = start }
+            if let end, end >= (start ?? shifts[i].odometerStart ?? 0) { shifts[i].odometerEnd = end }
+        }
+        odometerStart = ""
         odometerEnd = ""
+        AppSync.shared.pull()
+        reload()
+    }
+
+    // MARK: Rodagem (quanto o carro rodou de verdade)
+
+    private var mileageCard: some View {
+        let sum = MileageMath.summary(shifts: shifts.filter { week.contains($0.start) }, trips: trips, now: now)
+        let km = sum.km
+        let result = DrivingCalculator.calculate(DrivingInput(
+            kmDriven: km, paidKm: sum.paidKm > 0 ? sum.paidKm : nil, revenue: sum.revenue, hours: sum.hours > 0.1 ? sum.hours : nil,
+            consumptionKmPerLiter: settings.consumptionKmPerLiter, fuelPrice: settings.fuelPrice,
+            otherCostPerKm: settings.otherCostPerKm ?? 0, fallbackCostPerKm: settings.matrix.costPerKm))
+        return Card {
+            HStack {
+                Image(systemName: "road.lanes").foregroundStyle(Palette.brand)
+                Text("Rodagem da semana").font(.headline)
+            }
+            if let r = result {
+                HStack {
+                    Stat(title: "Km rodados", value: Br.decimal(km, 0))
+                    Stat(title: "Km morto", value: r.deadShare.map { Br.percent($0) } ?? "—",
+                         color: (r.deadShare ?? 0) > 0.4 ? Palette.warning : .primary)
+                    Stat(title: "Custo", value: Br.money(r.totalCost))
+                    Stat(title: "Sobrou", value: Br.money(r.profit), color: r.profit >= 0 ? Palette.positive : Palette.negative)
+                }
+                Text("Por km rodado: ganhou \(Br.money(r.revenuePerKm)), gastou \(Br.money(r.costPerKm)), sobrou \(Br.money(r.profitPerKm)).")
+                    .font(.footnote).foregroundStyle(.secondary)
+            } else {
+                Text("Ainda sem km nesta semana. Com um turno aberto, o GPS conta os km rodados e este quadro mostra quanto custou e quanto sobrou.")
+                    .font(.footnote).foregroundStyle(.secondary)
+            }
+            NavigationLink {
+                MileageView()
+            } label: {
+                Label("Calculadora de rodagem", systemImage: "function").font(.subheadline.weight(.semibold))
+            }
+        }
     }
 
     private func tripsIn(_ s: Shift) -> [TripRecord] {
@@ -186,7 +263,7 @@ struct DashboardView: View {
                     }
                     HStack {
                         Stat(title: "Horas", value: Br.decimal(hours, 1))
-                        Stat(title: "Km rodados", value: s.kmDriven.map { Br.decimal($0, 0) } ?? "—")
+                        Stat(title: s.kmSource.map { "Km (\($0))" } ?? "Km rodados", value: s.kmDriven.map { Br.decimal($0, 0) } ?? "—")
                         Stat(title: "R$/km real", value: s.kmDriven.flatMap { $0 > 0 ? Br.decimal(earned / $0) : nil } ?? "—")
                         Stat(title: "Km morto", value: s.kmDriven.flatMap { $0 > 0 ? Br.percent(max(0, $0 - paidKm) / $0) : nil } ?? "—")
                     }

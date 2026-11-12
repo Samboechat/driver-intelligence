@@ -49,6 +49,8 @@ jobs:
           test -d build/Build/Products/Release-iphoneos/DriverIntelligence.app/PlugIns/LiveActivity.appex
           test -f build/Build/Products/Release-iphoneos/DriverIntelligence.app/di-aceitar.wav
           test -f build/Build/Products/Release-iphoneos/DriverIntelligence.app/di-recusar.wav
+          test -f build/Build/Products/Release-iphoneos/DriverIntelligence.app/di-silencio.wav
+          /usr/libexec/PlistBuddy -c "Print :UIBackgroundModes:0" build/Build/Products/Release-iphoneos/DriverIntelligence.app/Info.plist | grep -q location
 
       - name: Resumo de erros (anotações)
         if: failure()

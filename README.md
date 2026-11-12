@@ -87,7 +87,7 @@ app/src/main/java/com/driverintelligence/
 
 ## iPhone (pasta `ios/`)
 
-Versão iOS 0.4, instalada por IPA (ESign/AltStore). A leitura usa a transmissão de tela do iOS e o resultado chega por notificação.
+Versão iOS 0.5, instalada por IPA (ESign/AltStore). A leitura usa a transmissão de tela do iOS e o resultado chega por notificação.
 
 - **Matriz de aceite** (`DriverCore/AcceptanceMatrix.swift`): ACEITAR / AVALIAR / RECUSAR por categoria.
   R$/km = valor ÷ (busca + viagem). CPK R$ 0,50. Piso R$ 42/h (recusa abaixo), ideal R$ 54/h.
@@ -106,6 +106,11 @@ Versão iOS 0.4, instalada por IPA (ESign/AltStore). A leitura usa a transmissã
   gravação, os chamados e os ajustes viajam pela central de notificações; cada notificação também leva o seu registro.
 - **Notificação**: título com veredito e valor, subtítulo com R$/km e R$/h, corpo com o motivo. Um som por veredito.
 - **Diagnóstico** (Ajustes › Diagnóstico da leitura): estado do canal e o texto dos chamados que não foram lidos.
-- **Dynamic Island** (experimental): aberta pelo app; a atualização em segundo plano depende do iOS.
+- **Dynamic Island**: R$/km e R$/h de cada chamado na cor do veredito (compacta, mínima e expandida). O app abre a
+  ilha e a atualiza em segundo plano; quem o mantém acordado com o Uber na frente é o GPS do turno
+  (`App/LocationService.swift`, modo de fundo `location`). A extensão avisa o app na hora por um sinal Darwin.
+- **Rodagem** (Painel › Calculadora de rodagem): km rodados pelo GPS (`DriverCore/Odometer.swift`) ou pelo painel,
+  km morto, custo de combustível e outros, sobra real por km e por hora, e o consumo real do carro.
+- **Turno automático**: abre ao ligar a leitura e fecha com a leitura desligada e o carro parado há 20 minutos.
 
 Testes do núcleo: `cd ios/DriverCore && swift test`. O IPA sai do workflow `iOS` (GitHub Actions), sem assinatura.

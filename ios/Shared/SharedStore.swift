@@ -47,6 +47,12 @@ struct DriverSettings: Codable, Equatable {
     var verdictSounds: Bool = true
     /// Guardar o texto das telas que pareciam chamado e não foram lidas (diagnóstico; fica só no aparelho).
     var keepReadDiagnostics: Bool = true
+    /// Expandir a Dynamic Island a cada chamado.
+    var islandAlert: Bool = true
+    /// GPS: mede os km rodados no turno e mantém o app acordado para atualizar a Dynamic Island.
+    var gpsTracking: Bool = true
+    /// Abrir o turno sozinho ao ligar a leitura (e fechar com o carro parado e a leitura desligada).
+    var autoShift: Bool = true
     /// Versão dos ajustes salvos (para migrar padrões).
     var schema: Int = 2
 
@@ -87,6 +93,9 @@ struct DriverSettings: Codable, Equatable {
         liveActivity = v(.liveActivity, d.liveActivity)
         verdictSounds = v(.verdictSounds, d.verdictSounds)
         keepReadDiagnostics = v(.keepReadDiagnostics, d.keepReadDiagnostics)
+        islandAlert = v(.islandAlert, d.islandAlert)
+        gpsTracking = v(.gpsTracking, d.gpsTracking)
+        autoShift = v(.autoShift, d.autoShift)
         // Ajustes salvos antes da versão 2: os prints passam a ser opcionais e começam desligados.
         if v(.schema, 1) < 2 {
             saveScreenshots = false
@@ -371,6 +380,43 @@ enum SharedStore {
     static var deletedTrips: [String] {
         get { load("deletedTrips", [String].self) ?? [] }
         set { save("deletedTrips", Array(newValue.suffix(300))) }
+    }
+
+    /// Altera os turnos a partir do que está salvo agora (nunca de uma cópia antiga da tela).
+    static func updateShifts(_ body: (inout [Shift]) -> Void) {
+        var s = shifts
+        body(&s)
+        shifts = s
+    }
+
+    /// Hodômetro por GPS do turno aberto (para continuar a conta se o app for fechado).
+    static var odometer: OdometerTracker? {
+        get { load("odometer", OdometerTracker.self) }
+        set { if let newValue { save("odometer", newValue) } else { defaults.removeObject(forKey: "odometer") } }
+    }
+
+    /// Turno ao qual o hodômetro salvo pertence.
+    static var odometerShift: String? {
+        get { defaults.string(forKey: "odometerShift") }
+        set { defaults.set(newValue, forKey: "odometerShift") }
+    }
+
+    /// Gravação para a qual o turno automático já foi aberto (início da transmissão).
+    static var autoShiftSession: Date? {
+        get { defaults.object(forKey: "autoShiftSession") as? Date }
+        set { defaults.set(newValue, forKey: "autoShiftSession") }
+    }
+
+    /// Onde o carro estava quando cada chamado chegou: id do chamado → [latitude, longitude]. Fica só no aparelho.
+    static var offerGeo: [String: [Double]] {
+        get { load("offerGeo", [String: [Double]].self) ?? [:] }
+        set { save("offerGeo", newValue) }
+    }
+
+    /// Último erro ao abrir a Dynamic Island (diagnóstico).
+    static var liveError: String? {
+        get { defaults.string(forKey: "liveError") }
+        set { defaults.set(newValue, forKey: "liveError") }
     }
 
     /// Telas que pareciam chamado e não foram lidas (diagnóstico).

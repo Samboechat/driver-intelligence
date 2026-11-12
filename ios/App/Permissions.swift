@@ -28,6 +28,8 @@ final class Permissions: ObservableObject {
         await requestNotifications()
         // Fotos só é pedido com os prints ligados nos Ajustes.
         if SharedStore.settings.saveScreenshots { await requestPhotos() }
+        // Localização: km rodados e Dynamic Island em tempo real.
+        if SharedStore.settings.gpsTracking { LocationService.shared.requestPermission() }
         await refresh()
     }
 

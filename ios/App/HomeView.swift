@@ -69,6 +69,7 @@ enum ReadingState {
 struct HomeView: View {
     @EnvironmentObject var perms: Permissions
     @ObservedObject private var capture = CaptureMonitor.shared
+    @ObservedObject private var gps = LocationService.shared
     @State private var status = SharedStore.status
     @State private var history = SharedStore.history
     @State private var trips = SharedStore.trips
@@ -95,6 +96,7 @@ struct HomeView: View {
             ScrollView {
                 VStack(spacing: 14) {
                     statusCard
+                    islandCard
                     if inTrip { tripCard }
                     if needsSetup { setupCard }
                     lastOfferCard
@@ -129,6 +131,34 @@ struct HomeView: View {
         settings = SharedStore.settings
         factors = SharedStore.currentFactors(settings)
         Task { await perms.refresh() }
+    }
+
+    // MARK: Dynamic Island
+
+    /// Só aparece quando falta algo para a ilha mostrar os chamados.
+    @ViewBuilder private var islandCard: some View {
+        if settings.liveActivity {
+            if #available(iOS 16.2, *) {
+                if !LiveActivityController.isAvailable {
+                    Card {
+                        Label("Dynamic Island desligada", systemImage: "exclamationmark.triangle.fill").font(.headline).foregroundStyle(Palette.warning)
+                        Text("As Atividades ao Vivo estão desligadas para este app. Ative em Ajustes › Driver Intelligence › Atividades ao Vivo.")
+                            .font(.footnote).foregroundStyle(.secondary)
+                        Button("Abrir Ajustes") { perms.openAppSettings() }.buttonStyle(.bordered).controlSize(.small)
+                    }
+                } else if settings.gpsTracking && !gps.authorized {
+                    Card {
+                        Label("Dynamic Island em tempo real", systemImage: "location.fill").font(.headline)
+                        Text("Para a ilha mostrar R$/km e R$/h de cada chamado com o Uber na frente, o app precisa ficar acordado, e é a localização que permite isso. Ela também conta os km rodados no turno. Nada sai do aparelho.")
+                            .font(.footnote).foregroundStyle(.secondary)
+                        Button(gps.canAsk ? "Permitir localização" : "Localização negada. Abrir Ajustes") {
+                            if gps.canAsk { gps.requestPermission() } else { perms.openAppSettings() }
+                        }
+                        .buttonStyle(.borderedProminent).controlSize(.small)
+                    }
+                }
+            }
+        }
     }
 
     // MARK: Estado da leitura

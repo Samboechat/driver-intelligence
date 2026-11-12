@@ -8,10 +8,24 @@ enum LiveActivityController {
     static var isAvailable: Bool { ActivityAuthorizationInfo().areActivitiesEnabled }
     static var isRunning: Bool { !Activity<RideActivityAttributes>.activities.isEmpty }
 
-    static func update(_ state: RideActivityAttributes.ContentState) {
-        let content = ActivityContent(state: state, staleDate: nil, relevanceScore: state.phase == .offer ? 100 : 50)
+    /// Se ninguém atualizar até essa hora, a ilha mostra "sem atualização" em vez de um número velho.
+    static func content(_ state: RideActivityAttributes.ContentState) -> ActivityContent<RideActivityAttributes.ContentState> {
+        ActivityContent(state: state, staleDate: Date().addingTimeInterval(state.phase == .offer ? 90 : 240),
+                        relevanceScore: state.phase == .offer ? 100 : 50)
+    }
+
+    /// `expand`: abre a ilha por alguns segundos (em silêncio; o som é o da notificação).
+    static func update(_ state: RideActivityAttributes.ContentState, expand: Bool = false) {
+        let content = content(state)
         for activity in Activity<RideActivityAttributes>.activities {
-            Task { await activity.update(content) }
+            Task {
+                if expand {
+                    await activity.update(content, alertConfiguration: AlertConfiguration(
+                        title: "\(state.verdict)", body: "Novo chamado", sound: .named("di-silencio.wav")))
+                } else {
+                    await activity.update(content)
+                }
+            }
         }
     }
 

@@ -19,6 +19,8 @@ struct RideActivityAttributes: Codable, Hashable {
         var perHour: Double?
         var category: String?
         var alert: String?
+        /// Motivo em uma linha curta ("Km baixo: 1,50 · mínimo 2,00").
+        var reason: String?
         var offersToday: Int = 0
         var updatedAt = Date()
     }

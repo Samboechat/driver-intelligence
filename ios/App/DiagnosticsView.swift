@@ -6,6 +6,7 @@ import DriverCore
 struct DiagnosticsView: View {
     @EnvironmentObject var perms: Permissions
     @ObservedObject private var capture = CaptureMonitor.shared
+    @ObservedObject private var gps = LocationService.shared
     @State private var status = SharedStore.status
     @State private var misses = SharedStore.misses
     @State private var settings = SharedStore.settings
@@ -29,6 +30,21 @@ struct DiagnosticsView: View {
                 Text("Estado")
             } footer: {
                 Text("Instalado pelo ESign, o app costuma ficar sem o armazenamento compartilhado. Nesse caso a leitura conversa com o app por um canal reserva, e tudo continua funcionando.")
+            }
+
+            Section {
+                row("Atividades ao Vivo no iPhone", islandAvailable ? "Permitidas" : "Desligadas",
+                    islandAvailable ? Palette.positive : Palette.negative)
+                row("Ilha aberta agora", islandRunning ? "Sim" : "Não", islandRunning ? Palette.positive : Color.secondary)
+                if let e = SharedStore.liveError { Text("Erro ao abrir a ilha: \(e)").font(.footnote).foregroundStyle(Palette.warning) }
+                row("Localização", locationLabel, gps.authorized ? Palette.positive : Palette.warning)
+                row("GPS ligado agora", gps.isTracking ? "Sim" : "Não", gps.isTracking ? Palette.positive : Color.secondary)
+                row("Última posição", gps.lastFix.map { ago($0) } ?? "—")
+                if let e = gps.lastError { Text("Erro do GPS: \(e)").font(.footnote).foregroundStyle(Palette.warning) }
+            } header: {
+                Text("Dynamic Island e GPS")
+            } footer: {
+                Text("Para a ilha receber os chamados com o Uber na frente: Atividades ao Vivo permitidas, localização permitida e GPS ligado. Se \"Ilha aberta agora\" ficar em Não com a leitura ligada, abra o app uma vez com a leitura já rodando.")
             }
 
             Section("Esta gravação") {
@@ -80,6 +96,26 @@ struct DiagnosticsView: View {
         .onChange(of: settings) { new in
             SharedStore.settings = new
             Bridge.publishSettings(new)
+        }
+    }
+
+    private var islandAvailable: Bool {
+        if #available(iOS 16.2, *) { return LiveActivityController.isAvailable }
+        return false
+    }
+
+    private var islandRunning: Bool {
+        if #available(iOS 16.2, *) { return LiveActivityController.isRunning }
+        return false
+    }
+
+    private var locationLabel: String {
+        switch gps.authorization {
+        case .authorizedAlways: return "Sempre"
+        case .authorizedWhenInUse: return "Durante o uso"
+        case .denied: return "Negada"
+        case .restricted: return "Bloqueada"
+        default: return "Ainda não pedida"
         }
     }
 

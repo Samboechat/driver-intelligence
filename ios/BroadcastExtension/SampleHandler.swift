@@ -57,6 +57,7 @@ final class SampleHandler: RPBroadcastSampleHandler {
     private var liveShowingOffer = false
     private var lastOfferSeen: CFAbsoluteTime = 0
     private let liveOfferHold: CFAbsoluteTime = 20
+    private var lastLivePush: CFAbsoluteTime = 0
 
     // Diagnóstico: cartões que ficaram pela metade
     private var missStreak = 0
@@ -153,6 +154,8 @@ final class SampleHandler: RPBroadcastSampleHandler {
             liveShowingOffer = false
             pushLive(.searching(offersToday: status.offersNotified))
         }
+        // Renova a ilha de tempos em tempos para ela não ser marcada como desatualizada.
+        if let live, now - lastLivePush > 100 { pushLive(live) }
         if dirty {
             publish()
         } else if now - lastPulse >= 6 {
@@ -346,6 +349,7 @@ final class SampleHandler: RPBroadcastSampleHandler {
             perHour: analysis.basis.revenuePerHour,
             category: analysis.offer.category,
             alert: analysis.matrix?.alert,
+            reason: analysis.decision.classification == .green ? nil : record.reasons?.first,
             offersToday: status.offersNotified
         ))
         publish()
@@ -467,6 +471,7 @@ final class SampleHandler: RPBroadcastSampleHandler {
     /// Guarda o estado para o app e tenta atualizar a Atividade ao Vivo aberta por ele.
     /// Experimental: o iOS pode não entregar a atualização vinda da extensão; a notificação é o canal principal.
     private func pushLive(_ state: RideActivityAttributes.ContentState) {
+        lastLivePush = CFAbsoluteTimeGetCurrent()
         live = state
         SharedStore.liveState = state
         guard settings.liveActivity else { return }

@@ -20,6 +20,8 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         Notifier.registerCategories()
         // Deixa os ajustes atuais à mão para a leitura de tela (ver Bridge).
         Bridge.publishSettings(SharedStore.settings)
+        // Sincronização com a leitura, turno automático, GPS e Dynamic Island (segue rodando em segundo plano).
+        AppSync.shared.start()
         return true
     }
 
@@ -57,9 +59,6 @@ struct RootView: View {
     @State private var tab = 0
     @State private var showPrints = SharedStore.settings.saveScreenshots
     private let photoTimer = Timer.publish(every: 20, on: .main, in: .common).autoconnect()
-    private let liveTimer = Timer.publish(every: 3, on: .main, in: .common).autoconnect()
-    private let syncTimer = Timer.publish(every: 2, on: .main, in: .common).autoconnect()
-    @State private var lastLiveState: RideActivityAttributes.ContentState?
 
     var body: some View {
         TabView(selection: $tab) {
@@ -82,51 +81,23 @@ struct RootView: View {
         .task {
             // Ao entrar no app: pede tudo o que ainda não foi decidido.
             await perms.requestAll()
-            sync()
+            AppSync.shared.pull()
             flushPhotos()
-            syncLiveActivity()
         }
         .onChange(of: phase) { p in
             guard p == .active else { return }
             Task { await perms.refresh() }
             Bridge.publishSettings(SharedStore.settings)
-            sync()
+            AppSync.shared.pull()
             flushPhotos()
             showPrints = SharedStore.settings.saveScreenshots
-            syncLiveActivity()
         }
         .onReceive(photoTimer) { _ in flushPhotos() }
-        .onReceive(liveTimer) { _ in if phase == .active { syncLiveActivity() } }
-        .onReceive(syncTimer) { _ in if phase == .active { sync() } }
-    }
-
-    /// Busca o que a leitura de tela publicou (estado da gravação, chamados, corridas).
-    private func sync() {
-        CaptureMonitor.shared.refresh()
-        Bridge.pull()
     }
 
     private func flushPhotos() {
         guard SharedStore.settings.saveScreenshots || !PhotoAlbum.notDetermined else { return }
         DispatchQueue.global(qos: .utility).async { _ = PhotoAlbum.flushPending() }
-    }
-
-    /// Com a leitura ligada, abre (ou atualiza) a Dynamic Island; com ela desligada, encerra.
-    private func syncLiveActivity() {
-        guard #available(iOS 16.2, *) else { return }
-        let settings = SharedStore.settings
-        let status = SharedStore.status
-        let live = ReadingState.current(status: status, capture: CaptureMonitor.shared) == .reading
-        guard settings.liveActivity && live else {
-            if LiveActivityController.isRunning { LiveActivityController.end() }
-            lastLiveState = nil
-            return
-        }
-        // Só mexe na atividade quando o estado muda (a extensão grava o último chamado no armazenamento compartilhado).
-        let state = SharedStore.liveState ?? .searching(offersToday: status.offersNotified)
-        guard !LiveActivityController.isRunning || state != lastLiveState else { return }
-        lastLiveState = state
-        LiveActivityController.start(state)
     }
 }
 

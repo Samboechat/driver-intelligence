@@ -18,21 +18,39 @@ public struct Shift: Equatable, Codable, Sendable, Identifiable {
     public var end: Date?
     public var odometerStart: Double?
     public var odometerEnd: Double?
+    /// Km medidos pelo GPS durante o turno.
+    public var gpsKm: Double?
+    /// Turno aberto sozinho ao ligar a leitura.
+    public var auto: Bool?
 
-    public init(id: String = UUID().uuidString, start: Date, end: Date? = nil, odometerStart: Double? = nil, odometerEnd: Double? = nil) {
+    public init(id: String = UUID().uuidString, start: Date, end: Date? = nil, odometerStart: Double? = nil, odometerEnd: Double? = nil,
+                gpsKm: Double? = nil, auto: Bool? = nil) {
         self.id = id
         self.start = start
         self.end = end
         self.odometerStart = odometerStart
         self.odometerEnd = odometerEnd
+        self.gpsKm = gpsKm
+        self.auto = auto
     }
 
     public var isOpen: Bool { end == nil }
 
-    /// Km rodados no turno (nil sem as duas leituras ou com leitura final menor que a inicial).
-    public var kmDriven: Double? {
+    /// Km pelo painel do carro (nil sem as duas leituras ou com leitura final menor que a inicial).
+    public var odometerKm: Double? {
         guard let a = odometerStart, let b = odometerEnd, b >= a else { return nil }
         return b - a
+    }
+
+    /// Km rodados no turno: o painel do carro vale mais; sem ele, o GPS.
+    public var kmDriven: Double? {
+        odometerKm ?? gpsKm.flatMap { $0 > 0.05 ? $0 : nil }
+    }
+
+    /// De onde veio o número de `kmDriven`.
+    public var kmSource: String? {
+        if odometerKm != nil { return "painel" }
+        return kmDriven != nil ? "GPS" : nil
     }
 
     public func hours(until now: Date) -> Double {

@@ -267,6 +267,7 @@ struct TripRow: View {
 
 struct SettingsView: View {
     @State private var s = SharedStore.settings
+    @ObservedObject private var gps = LocationService.shared
 
     var body: some View {
         NavigationStack {
@@ -351,9 +352,19 @@ struct SettingsView: View {
                     Text("Desligado (padrão): cada quadro é lido na memória e descartado; nenhuma imagem da tela é guardada. Ligado: os prints vão para o álbum \"Driver Intelligence\" do app Fotos e aparece a aba Prints.")
                 }
                 Section {
-                    Toggle("Dynamic Island (experimental)", isOn: $s.liveActivity)
+                    Toggle("Dynamic Island", isOn: $s.liveActivity)
+                    Toggle("Expandir a ilha a cada chamado", isOn: $s.islandAlert).disabled(!s.liveActivity)
+                    Toggle("GPS do turno", isOn: $s.gpsTracking)
+                    Toggle("Abrir o turno ao ligar a leitura", isOn: $s.autoShift)
+                    if s.gpsTracking, !gps.authorized {
+                        Button(gps.canAsk ? "Permitir localização" : "Localização negada. Abrir Ajustes") {
+                            if gps.canAsk { gps.requestPermission() } else { Permissions.shared.openAppSettings() }
+                        }
+                    }
+                } header: {
+                    Text("Dynamic Island e GPS")
                 } footer: {
-                    Text("Mostra \"Buscando corridas…\" e o veredito de cada chamado na Dynamic Island e na tela bloqueada. Precisa ser aberta pelo app (aba Início) e o iOS pode não atualizá-la com o app em segundo plano; a notificação continua sendo o aviso principal.")
+                    Text("A ilha mostra R$/km e R$/h de cada chamado, na cor do veredito. Ela é aberta pelo app e só recebe os chamados enquanto o app está acordado; é o GPS do turno que mantém o app acordado com o Uber na frente, além de contar os km rodados. Com o turno automático, o turno fecha sozinho com a leitura desligada e o carro parado há 20 minutos.")
                 }
                 Section {
                     NumberField(title: "Meta diária", value: $s.dailyGoal, suffix: "R$")
@@ -380,6 +391,7 @@ struct SettingsView: View {
             .onChange(of: s) { new in
                 SharedStore.settings = new
                 Bridge.publishSettings(new)
+                AppSync.shared.pull()
                 if new.saveScreenshots, PhotoAlbum.notDetermined { Task { await Permissions.shared.requestPhotos() } }
             }
         }

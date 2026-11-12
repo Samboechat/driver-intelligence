@@ -66,7 +66,10 @@ enum Bridge {
         ]
         if #available(iOS 15.0, *) { content.interruptionLevel = .passive }
         let trigger = UNTimeIntervalNotificationTrigger(timeInterval: farFuture, repeats: false)
-        center.add(UNNotificationRequest(identifier: prefix + key.rawValue, content: content, trigger: trigger))
+        center.add(UNNotificationRequest(identifier: prefix + key.rawValue, content: content, trigger: trigger)) { _ in
+            // Avisa o outro lado na hora (o app em segundo plano atualiza a Dynamic Island sem esperar o relógio).
+            if key == .pulse || key == .state { DarwinSignal.post() }
+        }
     }
 
     private static func decode<T: Decodable>(_ type: T.Type, _ info: [AnyHashable: Any]) -> T? {
