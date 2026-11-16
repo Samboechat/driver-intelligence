@@ -1,0 +1,96 @@
+name: Build IPA
+
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-ipa-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Compilar DriverProROI.ipa
+    runs-on: macos-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Versão do Xcode
+        run: xcodebuild -version
+
+      - name: Instalar XcodeGen
+        run: command -v xcodegen >/dev/null 2>&1 || brew install xcodegen
+
+      - name: Gerar projeto Xcode
+        run: xcodegen generate
+
+      - name: Compilar (Release, sem assinatura)
+        run: |
+          set -o pipefail
+          xcodebuild build \
+            -project DriverProROI.xcodeproj \
+            -scheme DriverProROI \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGN_ENTITLEMENTS="" \
+            2>&1 | tee build.log | grep -E "error:|warning: unre|BUILD (SUCCEEDED|FAILED)|^\*\*" || true
+          grep -q "BUILD SUCCEEDED" build.log
+
+      - name: Empacotar DriverProROI.ipa
+        run: |
+          set -euo pipefail
+          APP="build/Build/Products/Release-iphoneos/DriverProROI.app"
+          test -d "$APP"
+          # Assinatura ad-hoc apenas para embutir os entitlements (App Group).
+          # AltStore / SideStore / TrollStore reassinam o app na instalação.
+          if [ -d "$APP/PlugIns/DriverProWidgets.appex" ]; then
+            codesign --force --sign - \
+              --entitlements DriverProWidgets/DriverProWidgets.entitlements \
+              "$APP/PlugIns/DriverProWidgets.appex"
+          fi
+          codesign --force --sign - \
+            --entitlements DriverProROI/DriverProROI.entitlements \
+            "$APP"
+          rm -rf Payload DriverProROI.ipa
+          mkdir Payload
+          cp -R "$APP" Payload/
+          zip -qry DriverProROI.ipa Payload
+          ls -lh DriverProROI.ipa
+
+      - name: Publicar artefato
+        uses: actions/upload-artifact@v7
+        with:
+          name: DriverProROI-ipa
+          path: DriverProROI.ipa
+          if-no-files-found: error
+
+      - name: Publicar log de build (em caso de erro)
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: build-log
+          path: build.log
+          if-no-files-found: ignore
+
+      - name: Atualizar release "driverpro-roi-latest" (download direto do .ipa no iPhone)
+        if: github.ref_type == 'branch' && (github.ref_name == 'main' || github.ref_name == 'master' || github.ref_name == 'driverpro-roi')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete driverpro-roi-latest --yes --cleanup-tag || true
+          gh release create driverpro-roi-latest DriverProROI.ipa \
+            --title "DriverPro ROI — build ${{ github.run_number }}" \
+            --notes "IPA não assinado gerado automaticamente a partir de ${{ github.sha }}. Instale via AltStore, SideStore ou TrollStore." \
+            --prerelease \
+            --target "${{ github.sha }}"
