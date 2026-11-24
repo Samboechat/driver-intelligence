@@ -4,7 +4,7 @@ import Foundation
 
 /// O que o app de corrida está mostrando agora.
 public enum ScreenKind: String, Codable, Sendable {
-    case offer, goingToPickup, waitingPassenger, onTrip, tripCompleted, onlineIdle, offline, unknown
+    case offer, goingToPickup, waitingPassenger, onTrip, tripCompleted, tripCancelled, onlineIdle, offline, unknown
 
     public var label: String {
         switch self {
@@ -13,15 +13,22 @@ public enum ScreenKind: String, Codable, Sendable {
         case .waitingPassenger: return "Aguardando passageiro"
         case .onTrip: return "Em viagem"
         case .tripCompleted: return "Viagem concluída"
+        case .tripCancelled: return "Viagem cancelada"
         case .onlineIdle: return "Procurando viagens"
         case .offline: return "Offline"
         case .unknown: return "Outra tela"
         }
     }
+
+    /// Tela de uma corrida em andamento (busca, espera ou viagem).
+    public var isTrip: Bool { self == .goingToPickup || self == .waitingPassenger || self == .onTrip }
 }
 
 /// Identifica a tela pelo texto (pt/en). Telas não reconhecidas viram `.unknown` e nunca disparam transições.
 public enum ScreenClassifier {
+    static let cancelled = ["viagem cancelada", "corrida cancelada", "foi cancelada", "cancelou a viagem", "cancelou a corrida",
+                            "usuario cancelou", "passageiro cancelou", "trip cancelled", "trip canceled",
+                            "rider cancelled", "rider canceled"]
     static let completed = ["viagem concluida", "corrida concluida", "viagem finalizada", "corrida finalizada", "entrega concluida",
                             "avalie o passageiro", "avalie sua viagem", "avaliar passageiro", "como foi a viagem", "voce ganhou",
                             "trip complete", "rate your rider", "rate rider", "you earned"]
@@ -42,6 +49,7 @@ public enum ScreenClassifier {
         if isOfferScreen { return .offer }
         let t = " " + OfferTextParser.normalize(frame.lines.map(\.text).joined(separator: " ")) + " "
         func has(_ l: [String]) -> Bool { l.contains { t.contains($0) } }
+        if has(cancelled) { return .tripCancelled }
         if has(completed) { return .tripCompleted }
         if has(onTrip) { return .onTrip }
         if has(waiting) { return .waitingPassenger }
@@ -89,6 +97,11 @@ public struct TripTimeline: Equatable, Sendable {
     public var startedAt: TimeInterval?
     public var completedAt: TimeInterval?
     public var manual: Bool = false
+    /// O fim (ou o início) não foi visto na tela — celular bloqueado, CarPlay, outro app na frente.
+    /// Os tempos são estimados e a corrida não entra no aprendizado de tempo.
+    public var inferred: Bool = false
+    /// Última vez que uma tela desta corrida apareceu.
+    public var lastSeenAt: TimeInterval?
 
     public var actualPickupMin: Double? { (arrivedAt ?? startedAt).map { max(0, $0 - acceptedAt) / 60 } }
     public var actualTripMin: Double? {
@@ -96,6 +109,8 @@ public struct TripTimeline: Equatable, Sendable {
         return max(0, c - s) / 60
     }
     public var totalMin: Double? { completedAt.map { max(0, $0 - acceptedAt) / 60 } }
+    /// Duração prevista (com o ajuste de tempo real, quando há).
+    public var predictedMin: Double? { offer.realistic?.totalTimeMin ?? offer.financial.totalTimeMin }
 }
 
 public enum TrackerEvent: Sendable {
@@ -112,21 +127,50 @@ public enum TrackerEffect: Equatable, Sendable {
     case cancelled(TripTimeline)
 }
 
+/// Estado do acompanhamento que sobrevive a um reinício da leitura (o iOS pode encerrar a extensão no meio da corrida).
+public struct TrackerSnapshot: Codable, Equatable, Sendable {
+    public var phase: TripPhase
+    public var offer: OfferData
+    public var fingerprint: String?
+    public var acceptedAt: TimeInterval
+    public var arrivedAt: TimeInterval?
+    public var startedAt: TimeInterval?
+    public var manual: Bool
+    public var inferred: Bool
+    public var lastSeenAt: TimeInterval?
+    public var queued: OfferData?
+    public var queuedFingerprint: String?
+    public var queuedAt: TimeInterval?
+}
+
 /**
- * Entende o que o motorista fez com a oferta e acompanha a corrida aceita (mesma lógica do Android):
+ * Entende o que o motorista fez com a oferta e acompanha a corrida aceita:
  *  oferta → tela de busca/espera/viagem → ACEITA → … → concluída
  *  oferta → "procurando viagens" → RECUSADA (ou IGNORADA, se ficou até o tempo acabar)
  * Uma tela só conta depois de aparecer em 2 leituras seguidas.
+ *
+ * Casos da vida real que antes faziam a corrida sumir:
+ *  - chamado aceito DURANTE outra corrida (fila do Uber): fica guardado e vira a corrida seguinte;
+ *  - celular bloqueado / CarPlay / Waze na frente durante a viagem: a tela "em viagem" nunca aparece.
+ *    Quando o app de corrida volta mostrando "procurando viagens" ou "concluída", a corrida é dada como
+ *    feita (com tempo estimado), e só é cancelada se a tela disser "cancelada" ou se passou pouco tempo.
  */
 public struct TripTracker: Sendable {
     public var stableFrames = 2
     public var expireAfter: TimeInterval = 13
     public var unknownAfter: TimeInterval = 25
     public var maxTrip: TimeInterval = 4 * 3600
+    /// Chamado da fila vale por este tempo.
+    public var queueTTL: TimeInterval = 25 * 60
+    /// Menos que isso depois do aceite (sem ter visto a viagem) e voltou para "procurando": foi cancelada.
+    public var minInferredTrip: TimeInterval = 4 * 60
 
     public private(set) var phase: TripPhase = .none
     public private(set) var offer: OfferAnalysis?
     public private(set) var timeline: TripTimeline?
+    /// Chamado visto (ou aceito à mão) durante uma corrida: candidato à próxima.
+    public private(set) var queued: OfferAnalysis?
+    private var queuedAt: TimeInterval = 0
     private var offerShownAt: TimeInterval = 0
     private var offerLastSeen: TimeInterval = 0
     private var pending: ScreenKind?
@@ -141,6 +185,12 @@ public struct TripTracker: Sendable {
             self = TripTracker()
             return []
         case let .manualAccept(o, t):
+            if let tl = timeline {
+                // Já tem corrida: o aceite é da próxima (fila).
+                guard o.fingerprint != tl.offer.fingerprint else { return [] }
+                queue(o, at: t)
+                return [.outcome(o, .accepted, t)]
+            }
             if offer?.fingerprint != o.fingerprint { offerShownAt = t }
             offer = o
             return accept(at: t, phase: .toPickup, manual: true)
@@ -152,22 +202,75 @@ public struct TripTracker: Sendable {
         }
     }
 
+    // MARK: Guardar e retomar
+
+    public func snapshot() -> TrackerSnapshot? {
+        guard let tl = timeline else {
+            guard let q = queued else { return nil }
+            return TrackerSnapshot(phase: .none, offer: q.offer, fingerprint: q.fingerprint, acceptedAt: queuedAt,
+                                   manual: false, inferred: false, queued: q.offer, queuedFingerprint: q.fingerprint, queuedAt: queuedAt)
+        }
+        return TrackerSnapshot(
+            phase: phase, offer: tl.offer.offer, fingerprint: tl.offer.fingerprint, acceptedAt: tl.acceptedAt,
+            arrivedAt: tl.arrivedAt, startedAt: tl.startedAt, manual: tl.manual, inferred: tl.inferred, lastSeenAt: tl.lastSeenAt,
+            queued: queued?.offer, queuedFingerprint: queued?.fingerprint, queuedAt: queued == nil ? nil : queuedAt
+        )
+    }
+
+    /// Retoma uma corrida guardada. `analyze` refaz a análise da oferta com os ajustes atuais.
+    public mutating func restore(_ s: TrackerSnapshot, now: TimeInterval, analyze: (OfferData) -> OfferAnalysis) -> [TrackerEffect] {
+        self = TripTracker()
+        func rebuild(_ data: OfferData, _ fp: String?) -> OfferAnalysis {
+            var a = analyze(data)
+            if let fp { a.fingerprint = fp }
+            return a
+        }
+        if let q = s.queued, let at = s.queuedAt, now - at <= queueTTL {
+            queued = rebuild(q, s.queuedFingerprint)
+            queuedAt = at
+        }
+        guard s.phase == .toPickup || s.phase == .waiting || s.phase == .onTrip, now - s.acceptedAt <= maxTrip else { return [] }
+        let a = rebuild(s.offer, s.fingerprint)
+        var tl = TripTimeline(offer: a, acceptedAt: s.acceptedAt, arrivedAt: s.arrivedAt, startedAt: s.startedAt, manual: s.manual)
+        tl.inferred = s.inferred
+        tl.lastSeenAt = s.lastSeenAt
+        offer = a
+        timeline = tl
+        phase = s.phase
+        return [.phase(s.phase, tl)]
+    }
+
+    // MARK: Telas
+
     private mutating func clear() -> [TrackerEffect] {
         let had = phase != .none
         phase = .none; offer = nil; timeline = nil
         return had ? [.phase(.none, nil)] : []
     }
 
+    private mutating func queue(_ o: OfferAnalysis, at t: TimeInterval) {
+        if queued?.fingerprint != o.fingerprint { queuedAt = t }
+        queued = o
+    }
+
     private mutating func observe(_ kind: ScreenKind, _ o: OfferAnalysis?, _ t: TimeInterval) -> [TrackerEffect] {
         if pending == kind { pendingCount += 1 } else { pending = kind; pendingCount = 1; pendingSince = t }
         let stable = pendingCount >= stableFrames
-        if let tl = timeline, t - tl.acceptedAt > maxTrip { return clear() }
+        if queued != nil, t - queuedAt > queueTTL { queued = nil }
+        if let tl = timeline, t - tl.acceptedAt > maxTrip { return finishUnseen(tl, at: t) }
 
         switch phase {
         case .none:
             if kind == .offer, let o, o.fingerprint != nil {
                 phase = .offer; offer = o; offerShownAt = t; offerLastSeen = t
                 return [.phase(.offer, nil)]
+            }
+            // Corrida começou sem a oferta ter sido vista agora: é o chamado que ficou na fila.
+            if kind.isTrip, stable, let q = queued {
+                queued = nil
+                offer = q
+                offerShownAt = queuedAt
+                return accept(at: pendingSince, phase: phaseFor(kind), manual: false)
             }
             return []
 
@@ -196,7 +299,11 @@ public struct TripTracker: Sendable {
 
         case .toPickup, .waiting:
             guard var tl = timeline else { return clear() }
+            if kind.isTrip { tl.lastSeenAt = t; timeline = tl }
             switch kind {
+            case .offer:
+                if let o, o.fingerprint != nil, o.fingerprint != tl.offer.fingerprint { queue(o, at: t) }
+                return []
             case .waitingPassenger where stable && phase == .toPickup:
                 tl.arrivedAt = pendingSince
                 return move(.waiting, tl)
@@ -204,17 +311,32 @@ public struct TripTracker: Sendable {
                 tl.startedAt = pendingSince
                 tl.arrivedAt = tl.arrivedAt ?? pendingSince
                 return move(.onTrip, tl)
-            case .tripCompleted, .onlineIdle, .offline:
-                if pendingCount >= stableFrames + 1 { return [.cancelled(tl)] + clear() }
-                return []
+            case .tripCancelled where stable:
+                return [.cancelled(tl)] + clear()
+            case .tripCompleted where stable:
+                // A viagem aconteceu enquanto a tela não estava visível.
+                return finishUnseen(tl, at: pendingSince)
+            case .onlineIdle, .offline:
+                guard pendingCount >= stableFrames + 1 else { return [] }
+                let elapsed = pendingSince - tl.acceptedAt
+                let needed = max(minInferredTrip, (tl.predictedMin ?? 0) * 60 * 0.5)
+                if elapsed >= needed { return finishUnseen(tl, at: pendingSince) }
+                return [.cancelled(tl)] + clear()
             default:
                 return []
             }
 
         case .onTrip:
-            guard let tl = timeline else { return clear() }
+            guard var tl = timeline else { return clear() }
             switch kind {
-            case .tripCompleted: return finish(tl, at: pendingSince)
+            case .onTrip, .goingToPickup, .waitingPassenger:
+                tl.lastSeenAt = t
+                timeline = tl
+                return []
+            case .offer:
+                if let o, o.fingerprint != nil, o.fingerprint != tl.offer.fingerprint { queue(o, at: t) }
+                return []
+            case .tripCompleted, .tripCancelled: return finish(tl, at: pendingSince)
             case .onlineIdle, .offline: return stable ? finish(tl, at: pendingSince) : []
             default: return []
             }
@@ -235,12 +357,14 @@ public struct TripTracker: Sendable {
 
     private mutating func accept(at t: TimeInterval, phase p: TripPhase, manual: Bool) -> [TrackerEffect] {
         guard let o = offer, timeline == nil else { return [] }
-        let tl = TripTimeline(
+        if queued?.fingerprint == o.fingerprint { queued = nil }
+        var tl = TripTimeline(
             offer: o, acceptedAt: t,
             arrivedAt: (p == .waiting || p == .onTrip) ? t : nil,
             startedAt: p == .onTrip ? t : nil,
             manual: manual
         )
+        tl.lastSeenAt = t
         timeline = tl
         phase = p
         return [.outcome(o, .accepted, t), .phase(p, tl)]
@@ -259,6 +383,16 @@ public struct TripTracker: Sendable {
         done.arrivedAt = tl.arrivedAt ?? started
         done.completedAt = max(t, started)
         return [.finished(done)] + clear()
+    }
+
+    /// Fim que não foi visto: a corrida durou o previsto, sem passar da hora em que a tela voltou.
+    private mutating func finishUnseen(_ tl: TripTimeline, at t: TimeInterval) -> [TrackerEffect] {
+        var done = tl
+        done.inferred = true
+        let predicted = (tl.predictedMin ?? 0) * 60
+        let lastSeen = tl.lastSeenAt ?? tl.acceptedAt
+        let estimate = max(lastSeen, tl.acceptedAt + predicted)
+        return finish(done, at: min(t, estimate))
     }
 }
 

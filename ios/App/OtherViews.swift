@@ -250,7 +250,7 @@ struct TripRow: View {
             RoundedRectangle(cornerRadius: 2).fill(trip.cls.color).frame(width: 4, height: 44)
             VStack(alignment: .leading, spacing: 2) {
                 Text(Br.money(trip.fare)).font(.headline.monospacedDigit())
-                Text([trip.category, Br.km(trip.totalKm), "real \(Br.minutes(trip.totalMin))", trip.offeredMin.map { "app \(Br.minutes($0))" }]
+                Text([trip.category, Br.km(trip.totalKm), (trip.inferred == true ? "≈\(Br.minutes(trip.totalMin)) (estimado)" : "real \(Br.minutes(trip.totalMin))"), trip.offeredMin.map { "app \(Br.minutes($0))" }]
                     .compactMap { $0 }.joined(separator: " · "))
                     .font(.caption).foregroundStyle(.secondary)
             }

@@ -23,6 +23,8 @@ struct RideActivityAttributes: Codable, Hashable {
         var reason: String?
         var offersToday: Int = 0
         var updatedAt = Date()
+        /// Hora do aceite da corrida em andamento (a ilha mostra o cronômetro).
+        var tripStartedAt: Date?
     }
 
     var startedAt = Date()

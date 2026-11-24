@@ -228,6 +228,8 @@ struct TripRecord: Codable, Identifiable, Equatable {
     var classification: String
     var manual: Bool
     var screenshot: String?
+    /// Fim (ou início) não visto na tela — celular bloqueado, CarPlay, outro app na frente: tempo estimado.
+    var inferred: Bool?
 
     var cls: Classification { Classification(rawValue: classification) ?? .gray }
 }
@@ -344,6 +346,12 @@ enum SharedStore {
     static var liveState: RideActivityAttributes.ContentState? {
         get { load("liveState", RideActivityAttributes.ContentState.self) }
         set { if let newValue { save("liveState", newValue) } else { defaults.removeObject(forKey: "liveState") } }
+    }
+
+    /// Corrida em andamento (só a extensão usa): retomada se a leitura reiniciar no meio dela.
+    static var tracker: TrackerSnapshot? {
+        get { load("tracker", TrackerSnapshot.self) }
+        set { if let newValue { save("tracker", newValue) } else { defaults.removeObject(forKey: "tracker") } }
     }
 
     static var command: AppCommand? {

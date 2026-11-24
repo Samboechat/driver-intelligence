@@ -78,7 +78,7 @@ enum Notifier {
         let content = UNMutableNotificationContent()
         content.title = "\(t.cls.dot) Corrida concluída · \(Br.money(t.fare))"
         var lines: [String] = []
-        var first = "Tempo real \(Br.minutes(t.totalMin))"
+        var first = (t.inferred == true ? "Tempo estimado " : "Tempo real ") + Br.minutes(t.totalMin)
         if let offered = t.offeredMin { first += " (app dizia \(Br.minutes(offered)))" }
         lines.append(first)
         lines.append("\(Br.perHour(t.revenuePerHour)) real · lucro \(Br.money(t.profit))")

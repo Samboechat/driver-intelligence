@@ -67,6 +67,116 @@ final class TripTrackerTests: XCTestCase {
         XCTAssertTrue(done.manual)
     }
 
+    private func finished(_ fx: [TrackerEffect]) -> TripTimeline? {
+        for e in fx { if case let .finished(tl) = e { return tl } }
+        return nil
+    }
+
+    private func cancelled(_ fx: [TrackerEffect]) -> Bool {
+        fx.contains { if case .cancelled = $0 { return true }; return false }
+    }
+
+    /// Chamado aceito durante outra corrida (fila): vira a corrida seguinte, e não some.
+    func testChamadoDaFilaViraProximaCorrida() {
+        var t = TripTracker()
+        var fx: [TrackerEffect] = []
+        fx += t.handle(.observe(.offer, offer, 0))
+        fx += t.handle(.observe(.onTrip, nil, 3))
+        fx += t.handle(.observe(.onTrip, nil, 4))
+        XCTAssertEqual(t.phase, .onTrip)
+        // Novo chamado aparece por cima da viagem.
+        fx += t.handle(.observe(.offer, other, 600))
+        fx += t.handle(.observe(.offer, other, 603))
+        fx += t.handle(.observe(.onTrip, nil, 606))
+        XCTAssertEqual(t.queued?.fingerprint, other.fingerprint)
+        fx += t.handle(.observe(.tripCompleted, nil, 1200))
+        XCTAssertNotNil(finished(fx))
+        XCTAssertEqual(t.phase, .none)
+        // O Uber já vai direto para a busca do próximo passageiro.
+        var next: [TrackerEffect] = []
+        next += t.handle(.observe(.goingToPickup, nil, 1230))
+        next += t.handle(.observe(.goingToPickup, nil, 1233))
+        XCTAssertEqual(t.phase, .toPickup)
+        XCTAssertTrue(next.contains(.outcome(other, .accepted, 1230)))
+        XCTAssertNil(t.queued)
+        next += t.handle(.observe(.onTrip, nil, 1500))
+        next += t.handle(.observe(.onTrip, nil, 1503))
+        next += t.handle(.observe(.tripCompleted, nil, 2700))
+        XCTAssertEqual(finished(next)?.offer.fingerprint, other.fingerprint)
+    }
+
+    /// "Aceitei" na notificação durante uma corrida: guarda para a próxima em vez de ignorar.
+    func testAceiteManualDuranteCorrida() {
+        var t = TripTracker()
+        _ = t.handle(.manualAccept(offer, 0))
+        XCTAssertEqual(t.handle(.manualAccept(other, 300)), [.outcome(other, .accepted, 300)])
+        XCTAssertEqual(t.timeline?.offer.fingerprint, offer.fingerprint)
+        XCTAssertEqual(t.queued?.fingerprint, other.fingerprint)
+    }
+
+    /// Celular bloqueado / CarPlay: a viagem não aparece na tela, mas a corrida é registrada quando o Uber volta.
+    func testViagemNaoVistaEhRegistrada() {
+        var t = TripTracker()
+        var fx: [TrackerEffect] = []
+        fx += t.handle(.observe(.offer, offer, 0))
+        fx += t.handle(.observe(.goingToPickup, nil, 3))
+        fx += t.handle(.observe(.goingToPickup, nil, 4))
+        // 40 minutos sem ver nada; volta em "procurando viagens".
+        for i in 0..<3 { fx += t.handle(.observe(.onlineIdle, nil, 2400 + Double(i))) }
+        guard let done = finished(fx) else { return XCTFail("corrida sumiu") }
+        XCTAssertFalse(cancelled(fx))
+        XCTAssertTrue(done.inferred)
+        // Fim estimado pela previsão (~28 min com o ajuste de tempo real), não pela hora em que a tela voltou (40 min).
+        XCTAssertEqual(done.totalMin!, done.predictedMin!, accuracy: 0.2)
+        XCTAssertLessThan(done.totalMin!, 39)
+        XCTAssertEqual(t.phase, .none)
+
+        var t2 = TripTracker()
+        var fx2: [TrackerEffect] = []
+        fx2 += t2.handle(.observe(.offer, offer, 0))
+        fx2 += t2.handle(.observe(.waitingPassenger, nil, 3))
+        fx2 += t2.handle(.observe(.waitingPassenger, nil, 4))
+        fx2 += t2.handle(.observe(.tripCompleted, nil, 1800))
+        fx2 += t2.handle(.observe(.tripCompleted, nil, 1801))
+        XCTAssertTrue(finished(fx2)?.inferred ?? false)
+    }
+
+    func testCanceladaPelaTela() {
+        var t = TripTracker()
+        var fx: [TrackerEffect] = []
+        fx += t.handle(.observe(.offer, offer, 0))
+        fx += t.handle(.observe(.goingToPickup, nil, 3))
+        fx += t.handle(.observe(.goingToPickup, nil, 4))
+        fx += t.handle(.observe(.tripCancelled, nil, 900))
+        fx += t.handle(.observe(.tripCancelled, nil, 901))
+        XCTAssertTrue(cancelled(fx))
+        XCTAssertNil(finished(fx))
+        XCTAssertEqual(ScreenClassifier.classify(.fromText("O usuário cancelou a viagem"), isOfferScreen: false), .tripCancelled)
+    }
+
+    /// A leitura reinicia no meio da corrida: ela continua de onde parou.
+    func testRetomaDepoisDeReiniciar() {
+        var t = TripTracker()
+        _ = t.handle(.observe(.offer, offer, 0))
+        _ = t.handle(.observe(.onTrip, nil, 3))
+        _ = t.handle(.observe(.onTrip, nil, 4))
+        guard let snap = t.snapshot() else { return XCTFail() }
+        let data = try! JSONEncoder().encode(snap)
+        let back = try! JSONDecoder().decode(TrackerSnapshot.self, from: data)
+
+        var r = TripTracker()
+        let fx = r.restore(back, now: 600) { OfferAnalyzer().analyze(offer: $0, context: AnalysisContext()) }
+        XCTAssertEqual(r.phase, .onTrip)
+        XCTAssertFalse(fx.isEmpty)
+        let end = r.handle(.observe(.tripCompleted, nil, 1500))
+        XCTAssertEqual(finished(end)?.actualTripMin ?? 0, 24.95, accuracy: 0.01)
+        XCTAssertNil(r.snapshot())
+
+        var old = TripTracker()
+        XCTAssertTrue(old.restore(back, now: 6 * 3600) { OfferAnalyzer().analyze(offer: $0, context: AnalysisContext()) }.isEmpty)
+        XCTAssertEqual(old.phase, .none)
+    }
+
     func testClassificadorDeTelas() {
         func k(_ s: String) -> ScreenKind { ScreenClassifier.classify(.fromText(s), isOfferScreen: false) }
         XCTAssertEqual(k("Você está online\nProcurando viagens"), .onlineIdle)

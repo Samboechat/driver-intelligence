@@ -57,6 +57,10 @@ final class SampleHandler: RPBroadcastSampleHandler {
     private var liveShowingOffer = false
     private var lastOfferSeen: CFAbsoluteTime = 0
     private let liveOfferHold: CFAbsoluteTime = 20
+
+    // Corrida guardada
+    private var lastTrackerSave: CFAbsoluteTime = 0
+    private var lastQueuedFp: String?
     private var lastLivePush: CFAbsoluteTime = 0
 
     // Diagnóstico: cartões que ficaram pela metade
@@ -73,6 +77,13 @@ final class SampleHandler: RPBroadcastSampleHandler {
             SharedStore.status = status
             live = .searching(offersToday: 0)
             SharedStore.liveState = live
+            // A leitura reiniciou no meio de uma corrida (o iOS pode encerrar a extensão): continua de onde parou.
+            if let snap = SharedStore.tracker {
+                let ctx = context
+                let fx = tracker.restore(snap, now: Date().timeIntervalSince1970) { [analyzer] in analyzer.analyze(offer: $0, context: ctx) }
+                if fx.isEmpty && tracker.queued == nil { SharedStore.tracker = nil }
+                apply(fx)
+            }
             publish()
             fetchInbox()
         }
@@ -152,7 +163,7 @@ final class SampleHandler: RPBroadcastSampleHandler {
         let now = CFAbsoluteTimeGetCurrent()
         if liveShowingOffer, now - lastOfferSeen > liveOfferHold {
             liveShowingOffer = false
-            pushLive(.searching(offersToday: status.offersNotified))
+            pushLive(baseLive())
         }
         // Renova a ilha de tempos em tempos para ela não ser marcada como desatualizada.
         if let live, now - lastLivePush > 100 { pushLive(live) }
@@ -214,7 +225,10 @@ final class SampleHandler: RPBroadcastSampleHandler {
             apply(tracker.handle(.manualFinish(t)))
         case .reset:
             apply(tracker.handle(.reset))
+            SharedStore.tracker = nil
+            lastQueuedFp = nil
             clearTripStatus()
+            pushLive(baseLive())
         case .resetLearning:
             SharedStore.samples = []
             reloadSettings()
@@ -370,6 +384,7 @@ final class SampleHandler: RPBroadcastSampleHandler {
     }
 
     private func apply(_ effects: [TrackerEffect]) {
+        persistTracker(force: !effects.isEmpty)
         guard !effects.isEmpty else { return }
         for e in effects {
             switch e {
@@ -379,7 +394,11 @@ final class SampleHandler: RPBroadcastSampleHandler {
                     if let fp = offer.fingerprint {
                         UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: ["offer-\(fp)"])
                     }
-                    if settings.notifyTripSummary {
+                    let isNext = tracker.timeline.map { $0.offer.fingerprint != offer.fingerprint } ?? false
+                    if isNext {
+                        Notifier.postInfo("⏭️ Próxima corrida guardada · \(Br.money(offer.offer.fare))",
+                                          "Ela começa a contar quando a corrida atual terminar.", id: "trip-next")
+                    } else if settings.notifyTripSummary {
                         let predicted = offer.realistic?.totalTimeMin ?? offer.financial.totalTimeMin
                         Notifier.postInfo("🚗 Corrida aceita · \(Br.money(offer.offer.fare))",
                                           "Acompanhando o tempo real. Previsão: ~\(Br.minutes(predicted)).",
@@ -397,6 +416,7 @@ final class SampleHandler: RPBroadcastSampleHandler {
                     status.tripFare = nil
                     status.tripPredictedMin = nil
                 }
+                if !liveShowingOffer, p != .offer { pushLive(baseLive()) }
             case let .finished(tl):
                 finish(tl)
             case .cancelled:
@@ -408,11 +428,21 @@ final class SampleHandler: RPBroadcastSampleHandler {
         dirty = true
     }
 
+    /// Guarda a corrida em andamento (e o chamado da fila) para retomar se a leitura reiniciar.
+    private func persistTracker(force: Bool) {
+        let now = CFAbsoluteTimeGetCurrent()
+        let q = tracker.queued?.fingerprint
+        guard force || q != lastQueuedFp || (tracker.timeline != nil && now - lastTrackerSave > 30) else { return }
+        lastQueuedFp = q
+        lastTrackerSave = now
+        SharedStore.tracker = tracker.snapshot()
+    }
+
     private func finish(_ tl: TripTimeline) {
         let a = tl.offer
         let o = a.offer
         // Registra o tempo real para o app aprender o fator de correção.
-        if !tl.manual || tl.actualTripMin != nil {
+        if !tl.inferred, !tl.manual || tl.actualTripMin != nil {
             var s = SharedStore.samples
             s.append(TimingSample(at: tl.acceptedAt, offeredPickupMin: o.pickupTimeMin, actualPickupMin: tl.actualPickupMin,
                                   offeredTripMin: o.tripTimeMin, actualTripMin: tl.actualTripMin))
@@ -450,7 +480,8 @@ final class SampleHandler: RPBroadcastSampleHandler {
             revenuePerHour: o.fare.flatMap { f in total.flatMap { $0 > 0.5 ? f / ($0 / 60) : nil } },
             classification: measured.decision.classification.rawValue,
             manual: tl.manual,
-            screenshot: a.fingerprint.flatMap { shots[$0]?.name } ?? SharedStore.screenshotFor(fingerprint: a.fingerprint)
+            screenshot: a.fingerprint.flatMap { shots[$0]?.name } ?? SharedStore.screenshotFor(fingerprint: a.fingerprint),
+            inferred: tl.inferred ? true : nil
         )
         if settings.autoRegisterTrips {
             var trips = SharedStore.trips
@@ -467,6 +498,26 @@ final class SampleHandler: RPBroadcastSampleHandler {
     }
 
     // MARK: Dynamic Island
+
+    /// O que a ilha mostra quando não há chamado na tela: a corrida em andamento, ou "buscando".
+    private func baseLive() -> RideActivityAttributes.ContentState {
+        guard let tl = tracker.timeline, tracker.phase != .none, tracker.phase != .offer else {
+            return .searching(offersToday: status.offersNotified)
+        }
+        let a = tl.offer
+        return .init(
+            phase: .trip,
+            verdict: tracker.phase.label,
+            classification: a.decision.classification.rawValue,
+            fare: a.offer.fare,
+            perKm: a.financial.revenuePerKm,
+            perHour: a.basis.revenuePerHour,
+            category: a.offer.category,
+            reason: tracker.queued.map { "Próxima: " + Br.money($0.offer.fare) },
+            offersToday: status.offersNotified,
+            tripStartedAt: Date(timeIntervalSince1970: tl.acceptedAt)
+        )
+    }
 
     /// Guarda o estado para o app e tenta atualizar a Atividade ao Vivo aberta por ele.
     /// Experimental: o iOS pode não entregar a atualização vinda da extensão; a notificação é o canal principal.

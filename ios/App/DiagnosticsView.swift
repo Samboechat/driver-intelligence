@@ -143,6 +143,7 @@ struct DiagnosticsView: View {
         case .waitingPassenger: return "Aguardando passageiro"
         case .onTrip: return "Em viagem"
         case .tripCompleted: return "Corrida concluída"
+        case .tripCancelled: return "Corrida cancelada"
         case .onlineIdle: return "Online, sem chamado"
         case .offline: return "Offline"
         default: return "Outra tela"

@@ -14,8 +14,8 @@ packages:
 settings:
   base:
     SWIFT_VERSION: "5.0"
-    MARKETING_VERSION: "0.5.0"
-    CURRENT_PROJECT_VERSION: "5"
+    MARKETING_VERSION: "0.6.0"
+    CURRENT_PROJECT_VERSION: "6"
     DEVELOPMENT_TEAM: ""
     CODE_SIGN_STYLE: Automatic
     TARGETED_DEVICE_FAMILY: "1"
@@ -88,7 +88,8 @@ targets:
   LiveActivity:
     type: app-extension
     platform: iOS
-    deploymentTarget: "16.2"
+    # 18.0: o tamanho "small" (painel do CarPlay e do Apple Watch) só existe a partir dele.
+    deploymentTarget: "18.0"
     sources:
       - LiveActivity
       - path: Shared/RideActivityAttributes.swift
