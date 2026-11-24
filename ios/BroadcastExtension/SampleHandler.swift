@@ -363,7 +363,7 @@ final class SampleHandler: RPBroadcastSampleHandler {
             perHour: analysis.basis.revenuePerHour,
             category: analysis.offer.category,
             alert: analysis.matrix?.alert,
-            reason: analysis.decision.classification == .green ? nil : record.reasons?.first,
+            reason: Self.liveReason(analysis, record: record),
             offersToday: status.offersNotified
         ))
         publish()
@@ -498,6 +498,15 @@ final class SampleHandler: RPBroadcastSampleHandler {
     }
 
     // MARK: Dynamic Island
+
+    /// Linha curta da ilha: o dinâmico (se houver) vem primeiro, porque muda a leitura do valor.
+    private static func liveReason(_ a: OfferAnalysis, record: OfferRecord) -> String? {
+        if let s = a.matrix?.surge {
+            return s.real ? "⚡ +\(Br.money(s.amount)) dinâmico real"
+                : "⚡ Fachada: sem ele \(Br.money(s.baseFare)) · justo \(Br.money(s.fairFare))"
+        }
+        return a.decision.classification == .green ? nil : record.reasons?.first
+    }
 
     /// O que a ilha mostra quando não há chamado na tela: a corrida em andamento, ou "buscando".
     private func baseLive() -> RideActivityAttributes.ContentState {

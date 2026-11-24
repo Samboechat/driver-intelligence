@@ -224,10 +224,16 @@ public enum NotificationFormatter {
         }
         let title = "\(d.classification.dot) \(verdict) · \(Br.money(f.grossRevenue))"
 
+        let surge = mv?.surge
         var sub: [String] = []
         if let rk = f.revenuePerKm { sub.append(Br.perKm(rk)) }
+        if let pm = mv?.perMinute { sub.append("\(Br.money(pm))/min") }
         if let rh = b.revenuePerHour { sub.append("R$ \(Br.decimal(rh, 0))/h") }
-        if let c = a.offer.category { sub.append(c) }
+        if let surge {
+            sub.append("⚡+\(Br.money(surge.amount))")
+        } else if let c = a.offer.category {
+            sub.append(c)
+        }
 
         var lines: [String] = []
         if let mv {
@@ -240,7 +246,14 @@ public enum NotificationFormatter {
             lines.append(d.headline)
         }
 
+        if let surge, surge.real {
+            var line = "⚡ Dinâmico real: +\(Br.money(surge.amount)) de lucro extra · sem ele \(Br.money(surge.baseFare))"
+            if let bm = surge.basePerMinute { line += " (\(Br.money(bm))/min)" }
+            lines.append(line)
+        }
+
         var summary: [String] = []
+        if surge != nil, let c = a.offer.category { summary.append(c) }
         if let p = f.operatingProfit { summary.append("Lucro \(Br.money(p))") }
         if let km = f.totalDistanceKm {
             var s = "Total \(Br.decimal(km, 1)) km"
@@ -250,7 +263,10 @@ public enum NotificationFormatter {
         if !summary.isEmpty { lines.append(summary.joined(separator: " · ")) }
 
         if let mv {
-            if let alert = mv.alert { lines.append("⚠️ \(alert)") }
+            // O dinâmico de fachada já aparece no motivo; o alerta repetiria a mesma coisa.
+            if let alert = mv.alert, !(surge.map { !$0.real } ?? false && alert == "Dinâmico de fachada") {
+                lines.append("⚠️ \(alert)")
+            }
             if mv.zone.kind == .hot { lines.append("🔥 Zona quente\(mv.zone.name.map { ": \($0.capitalized)" } ?? "")") }
         }
         if d.classification != .gray, mv == nil, let t = a.fareTarget, let gap = t.gap, gap < 0 {

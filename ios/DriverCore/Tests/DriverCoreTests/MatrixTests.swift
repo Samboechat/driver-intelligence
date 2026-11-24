@@ -59,6 +59,75 @@ final class AcceptanceMatrixTests: XCTestCase {
 
     func cls(_ o: OfferData) -> Classification { OfferAnalyzer().analyze(offer: o, context: ctx).decision.classification }
 
+    /// Sem o piso por minuto, para testar só a hora.
+    func clsHour(_ o: OfferData) -> Classification {
+        OfferAnalyzer().analyze(offer: o, context: AnalysisContext(useRealisticTime: false, matrix: MatrixConfig(minPerMinute: 0)))
+            .decision.classification
+    }
+
+    func analyze(_ o: OfferData) -> OfferAnalysis { OfferAnalyzer().analyze(offer: o, context: ctx) }
+
+    func testPisoPorMinuto() {
+        // R$ 1,00/min: 20 reais em 20 minutos passa; em 21 minutos não.
+        let ok = OfferData(fare: 25, pickupDistanceKm: 2, tripDistanceKm: 8, pickupTimeMin: 5, tripTimeMin: 20, category: "Comfort")
+        XCTAssertEqual(analyze(ok).decision.classification, .green)
+        XCTAssertEqual(analyze(ok).matrix?.perMinute ?? 0, 1.0, accuracy: 1e-9)
+        var slow = ok
+        slow.tripTimeMin = 21
+        let a = analyze(slow)
+        XCTAssertEqual(a.decision.classification, .red)
+        XCTAssertTrue(a.matrix!.shortRefusals.contains { $0.hasPrefix("Minuto baixo") })
+    }
+
+    func testDinamicoReal() {
+        // Sem o dinâmico: R$ 25 em 10 km e 20 min → passa em tudo. Os R$ 5 são lucro a mais.
+        let o = OfferData(fare: 30, pickupDistanceKm: 2, tripDistanceKm: 8, pickupTimeMin: 4, tripTimeMin: 16,
+                          category: "Comfort", surgeAmount: 5)
+        let a = analyze(o)
+        XCTAssertEqual(a.decision.classification, .green)
+        let s = try! XCTUnwrap(a.matrix?.surge)
+        XCTAssertTrue(s.real)
+        XCTAssertEqual(s.baseFare, 25, accuracy: 1e-9)
+        XCTAssertEqual(s.extraGain, 5, accuracy: 1e-9)
+        XCTAssertNil(a.matrix?.alert)
+    }
+
+    func testDinamicoDeFachada() {
+        // Total R$ 25 passa (2,50/km · 1,00/min), mas sem os R$ 6 de dinâmico seriam R$ 19 (1,90/km · 0,76/min).
+        let o = OfferData(fare: 25, pickupDistanceKm: 2, tripDistanceKm: 8, pickupTimeMin: 5, tripTimeMin: 20,
+                          category: "Comfort", destination: "Parque Campolim", surgeAmount: 6)
+        let a = analyze(o)
+        // Nem a zona quente aprova: o motorista precisa decidir.
+        XCTAssertEqual(a.decision.classification, .yellow)
+        let s = try! XCTUnwrap(a.matrix?.surge)
+        XCTAssertFalse(s.real)
+        XCTAssertEqual(s.baseFare, 19, accuracy: 1e-9)
+        // Mínimo sem dinâmico = max(2,30 × 10 km, 1,00 × 25 min) = 25; justo = 25 + 6 = 31.
+        XCTAssertEqual(s.minimumBase, 25, accuracy: 1e-9)
+        XCTAssertEqual(s.fairFare, 31, accuracy: 1e-9)
+        XCTAssertEqual(s.extraGain, 0, accuracy: 1e-9)
+        XCTAssertEqual(a.matrix?.alert, "Dinâmico de fachada")
+        XCTAssertTrue(a.matrix!.shortCautions.contains { $0.hasPrefix("Dinâmico de fachada") })
+        let n = NotificationFormatter.format(a, goals: Goals())
+        XCTAssertTrue(n.subtitle.contains("⚡"))
+        XCTAssertTrue(n.body.contains("justo"))
+    }
+
+    func testDinamicoLidoErradoEhIgnorado() {
+        var o = OfferData(fare: 30, pickupDistanceKm: 2, tripDistanceKm: 8, pickupTimeMin: 4, tripTimeMin: 16, category: "Comfort")
+        o.surgeAmount = 30
+        XCTAssertNil(analyze(o).matrix?.surge)
+    }
+
+    func testAjustesAntigosCarregam() throws {
+        let old = #"{"costPerKm":0.6,"hourFloor":40,"hourIdeal":50,"shortTripKm":5,"longTripKm":20}"#
+        let m = try JSONDecoder().decode(MatrixConfig.self, from: Data(old.utf8))
+        XCTAssertEqual(m.costPerKm, 0.6)
+        XCTAssertEqual(m.minPerMinute, 1.0)
+        XCTAssertTrue(m.checkSurge)
+        XCTAssertEqual(m.comfort, MatrixConfig().comfort)
+    }
+
     func testFaixasComfort() {
         XCTAssertEqual(cls(offer(perKm: 2.30)), .green)
         XCTAssertEqual(cls(offer(perKm: 2.29)), .yellow)
@@ -76,10 +145,10 @@ final class AcceptanceMatrixTests: XCTestCase {
     }
 
     func testPisoPorHora() {
-        XCTAssertEqual(cls(offer(perKm: 2.50, perHour: 41.9)), .red)
-        XCTAssertEqual(cls(offer(perKm: 2.50, perHour: 42)), .yellow)
-        XCTAssertEqual(cls(offer(perKm: 2.50, perHour: 53.9)), .yellow)
-        XCTAssertEqual(cls(offer(perKm: 2.50, perHour: 54)), .green)
+        XCTAssertEqual(clsHour(offer(perKm: 2.50, perHour: 41.9)), .red)
+        XCTAssertEqual(clsHour(offer(perKm: 2.50, perHour: 42)), .yellow)
+        XCTAssertEqual(clsHour(offer(perKm: 2.50, perHour: 53.9)), .yellow)
+        XCTAssertEqual(clsHour(offer(perKm: 2.50, perHour: 54)), .green)
     }
 
     func testBuscaMaxima() {
@@ -108,7 +177,7 @@ final class AcceptanceMatrixTests: XCTestCase {
 
     func testZonaQuenteAprovaAmarelo() {
         XCTAssertEqual(cls(offer(perKm: 2.10, destination: "Parque Campolim, Sorocaba")), .green)
-        XCTAssertEqual(cls(offer(perKm: 2.50, perHour: 45, destination: "Mangal")), .green)
+        XCTAssertEqual(clsHour(offer(perKm: 2.50, perHour: 45, destination: "Mangal")), .green)
         // Mas não salva o que já era recusa.
         XCTAssertEqual(cls(offer(perKm: 1.95, destination: "Campolim")), .red)
         XCTAssertEqual(cls(offer(perKm: 2.50, perHour: 40, destination: "Campolim")), .red)
@@ -155,7 +224,7 @@ final class AcceptanceMatrixTests: XCTestCase {
         let a = OfferAnalyzer().analyze(offer: offer(perKm: 2.20, category: "UberX", destination: "Éden"), context: ctx)
         let n = NotificationFormatter.format(a, goals: Goals())
         XCTAssertEqual(n.title, "🟢 ACEITAR · R$ 22,00")
-        XCTAssertEqual(n.subtitle, "R$ 2,20/km · R$ 60/h · UberX")
+        XCTAssertEqual(n.subtitle, "R$ 2,20/km · R$ 1,00/min · R$ 60/h · UberX")
         XCTAssertTrue(n.body.contains("⚠️ Volta Vazia - Ligar Direcionamento"), n.body)
 
         let r = OfferAnalyzer().analyze(offer: offer(perKm: 1.5, pickup: 6, trip: 4, rating: 4.7), context: ctx)

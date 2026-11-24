@@ -12,13 +12,15 @@ struct SimulatorView: View {
     @State private var comfort = true
     @State private var destination = ""
     @State private var rating: Double? = nil
+    @State private var surge: Double? = nil
     @Environment(\.dismiss) private var dismiss
 
     private var analysis: OfferAnalysis? {
         guard fare != nil || tripKm != nil else { return nil }
         return OfferAnalyzer().analyze(
             offer: OfferData(fare: fare, pickupDistanceKm: pickupKm, tripDistanceKm: tripKm, pickupTimeMin: pickupMin, tripTimeMin: tripMin,
-                             category: comfort ? "Comfort" : "UberX", destination: destination.isEmpty ? nil : destination, passengerRating: rating),
+                             category: comfort ? "Comfort" : "UberX", destination: destination.isEmpty ? nil : destination,
+                             surgeAmount: surge, passengerRating: rating),
             context: SharedStore.settings.context
         )
     }
@@ -32,6 +34,7 @@ struct SimulatorView: View {
                     NumberField(title: "Tempo de busca", value: $pickupMin, suffix: "min")
                     NumberField(title: "Viagem", value: $tripKm, suffix: "km")
                     NumberField(title: "Tempo de viagem", value: $tripMin, suffix: "min")
+                    NumberField(title: "Dinâmico incluído (se tiver)", value: $surge, suffix: "R$")
                 }
                 Section("Matriz de aceite") {
                     Picker("Categoria", selection: $comfort) {
@@ -78,8 +81,13 @@ struct AnalysisSummary: View {
             }
             HStack {
                 Stat(title: "R$/km", value: Br.decimal(f.revenuePerKm))
+                if let pm = a.matrix?.perMinute { Stat(title: "R$/min", value: Br.decimal(pm)) }
                 Stat(title: a.realistic != nil ? "R$/h real" : "R$/h", value: Br.decimal(a.basis.revenuePerHour, 0))
                 Stat(title: "Lucro", value: Br.money(f.operatingProfit), color: (f.operatingProfit ?? 0) > 0 ? Palette.positive : Palette.negative)
+            }
+            if let s = a.matrix?.surge {
+                SurgeBox(amount: s.amount, base: s.baseFare, basePerKm: s.basePerKm, basePerMinute: s.basePerMinute,
+                         fair: s.fairFare, real: s.real)
             }
             if let real = a.realistic?.totalTimeMin, let shown = f.totalTimeMin {
                 Text("App diz \(Br.minutes(shown)) · na prática ~\(Br.minutes(real))").font(.footnote).foregroundStyle(.secondary)

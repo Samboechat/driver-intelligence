@@ -23,6 +23,15 @@ struct MatrixSettingsView: View {
                 Text("Entre o piso e o ideal a corrida fica amarela. A hora usa o tempo realista (busca + viagem).")
             }
 
+            Section {
+                NumberField(title: "Piso por minuto (sem dinâmico)", value: $s.matrix.minPerMinute.optional, suffix: "R$")
+                Toggle("Conferir o dinâmico", isOn: $s.matrix.checkSurge)
+            } header: {
+                Text("Minuto e dinâmico")
+            } footer: {
+                Text("Piso por minuto: valor ÷ (minutos de busca + viagem que aparecem no chamado). Abaixo dele, RECUSAR. Use 0 para desligar.\n\nConferir o dinâmico: tira o dinâmico do valor e vê se a corrida ainda paga o piso por minuto e o R$/km de aceite da categoria. Se não pagar, é dinâmico de fachada: o chamado vira AVALIAR e mostra o valor justo (mínimo sem dinâmico + dinâmico). Se pagar, o dinâmico inteiro é lucro a mais.")
+            }
+
             ruleSection("Comfort / Black", $s.matrix.comfort)
             ruleSection("UberX / 99", $s.matrix.standard)
 

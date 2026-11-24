@@ -173,6 +173,15 @@ struct OfferRecord: Codable, Identifiable, Equatable {
     /// Motivos curtos do veredito (os mesmos da notificação).
     var reasons: [String]?
     var tripKm: Double?
+    /// R$/min com os tempos do chamado.
+    var perMinute: Double?
+    /// Dinâmico: valor incluído, valor sem ele, R$/min sem ele, valor justo e se é ganho extra de verdade.
+    var surge: Double?
+    var surgeBase: Double?
+    var surgeBasePerKm: Double?
+    var surgeBasePerMinute: Double?
+    var surgeFair: Double?
+    var surgeReal: Bool?
 
     var cls: Classification { Classification(rawValue: classification) ?? .gray }
     var result: OfferOutcome? { outcome.flatMap(OfferOutcome.init(rawValue:)) }
@@ -206,6 +215,15 @@ struct OfferRecord: Codable, Identifiable, Equatable {
             reasons = r.isEmpty ? nil : r
         }
         tripKm = a.offer.tripDistanceKm
+        perMinute = a.matrix?.perMinute
+        if let s = a.matrix?.surge {
+            surge = s.amount
+            surgeBase = s.baseFare
+            surgeBasePerKm = s.basePerKm
+            surgeBasePerMinute = s.basePerMinute
+            surgeFair = s.fairFare
+            surgeReal = s.real
+        }
     }
 }
 

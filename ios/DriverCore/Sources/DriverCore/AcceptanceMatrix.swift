@@ -52,12 +52,17 @@ public struct MatrixConfig: Equatable, Codable, Sendable {
     public var shortTripKm: Double
     public var longTripKm: Double
     public var zones: ZoneConfig
+    /// Piso por minuto SEM dinâmico (busca + viagem, tempos da oferta). 0 = desligado.
+    public var minPerMinute: Double
+    /// Confere se o dinâmico é ganho extra de verdade: o valor sem ele precisa passar nas réguas.
+    public var checkSurge: Bool
 
     public init(
         costPerKm: Double = 0.50, hourFloor: Double = 42, hourIdeal: Double = 54,
         comfort: CategoryRule = CategoryRule(acceptPerKm: 2.30, yellowPerKm: 2.00, pickupShortKm: 5, pickupLongKm: 8, minRating: 4.80),
         standard: CategoryRule = CategoryRule(acceptPerKm: 2.10, yellowPerKm: 1.85, pickupShortKm: 3, pickupLongKm: 6, minRating: 4.85),
-        shortTripKm: Double = 5, longTripKm: Double = 20, zones: ZoneConfig = .sorocaba
+        shortTripKm: Double = 5, longTripKm: Double = 20, zones: ZoneConfig = .sorocaba,
+        minPerMinute: Double = 1.00, checkSurge: Bool = true
     ) {
         self.costPerKm = costPerKm
         self.hourFloor = hourFloor
@@ -67,6 +72,24 @@ public struct MatrixConfig: Equatable, Codable, Sendable {
         self.shortTripKm = shortTripKm
         self.longTripKm = longTripKm
         self.zones = zones
+        self.minPerMinute = minPerMinute
+        self.checkSurge = checkSurge
+    }
+
+    /// Ajustes salvos por versões antigas não têm os campos novos: cada um que faltar usa o padrão.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let d = MatrixConfig()
+        costPerKm = try c.decodeIfPresent(Double.self, forKey: .costPerKm) ?? d.costPerKm
+        hourFloor = try c.decodeIfPresent(Double.self, forKey: .hourFloor) ?? d.hourFloor
+        hourIdeal = try c.decodeIfPresent(Double.self, forKey: .hourIdeal) ?? d.hourIdeal
+        comfort = try c.decodeIfPresent(CategoryRule.self, forKey: .comfort) ?? d.comfort
+        standard = try c.decodeIfPresent(CategoryRule.self, forKey: .standard) ?? d.standard
+        shortTripKm = try c.decodeIfPresent(Double.self, forKey: .shortTripKm) ?? d.shortTripKm
+        longTripKm = try c.decodeIfPresent(Double.self, forKey: .longTripKm) ?? d.longTripKm
+        zones = try c.decodeIfPresent(ZoneConfig.self, forKey: .zones) ?? d.zones
+        minPerMinute = try c.decodeIfPresent(Double.self, forKey: .minPerMinute) ?? d.minPerMinute
+        checkSurge = try c.decodeIfPresent(Bool.self, forKey: .checkSurge) ?? d.checkSurge
     }
 
     public func rule(_ c: RideClass) -> CategoryRule { c == .comfort ? comfort : standard }
@@ -86,6 +109,33 @@ public struct MatrixConfig: Equatable, Codable, Sendable {
     }
 }
 
+/**
+ * Dinâmico na oferta: quanto é, quanto a corrida pagaria sem ele e se ele é ganho extra de verdade.
+ *
+ * "Dinâmico de fachada": o valor total passa nas réguas, mas o valor SEM o dinâmico não passaria —
+ * o dinâmico só está tapando uma tarifa baixa, e no fim a corrida paga o mesmo que uma comum.
+ * Dinâmico real: o valor sem ele já paga o piso, e o dinâmico inteiro é lucro a mais.
+ */
+public struct SurgeCheck: Equatable, Sendable {
+    /// Dinâmico incluído no valor.
+    public var amount: Double
+    /// Valor sem o dinâmico.
+    public var baseFare: Double
+    public var basePerKm: Double
+    public var basePerMinute: Double?
+    /// O mínimo que a corrida deveria pagar sem dinâmico (piso por minuto e R$/km de aceite).
+    public var minimumBase: Double
+    /// Valor justo com o dinâmico por cima: mínimo sem dinâmico + dinâmico.
+    public var fairFare: Double
+    /// O valor sem dinâmico já passa nas réguas: o dinâmico é ganho extra.
+    public var real: Bool
+    /// Quanto do dinâmico é ganho extra de verdade (0 se o valor sem ele ficou abaixo do mínimo).
+    public var extraGain: Double
+
+    /// "+R$ 4,00 dinâmico".
+    public var short: String { "⚡ +\(Br.money(amount)) dinâmico" }
+}
+
 /// Resultado da matriz para uma oferta.
 public struct MatrixVerdict: Equatable, Sendable {
     public var classification: Classification
@@ -101,6 +151,10 @@ public struct MatrixVerdict: Equatable, Sendable {
     public var shortCautions: [String] = []
     public var alert: String?
     public var headline: String
+    /// R$/min da oferta (valor total ÷ minutos de busca + viagem mostrados no chamado).
+    public var perMinute: Double?
+    /// Dinâmico (só quando o chamado mostra um).
+    public var surge: SurgeCheck?
 
     /// ACEITAR / AVALIAR / RECUSAR.
     public var label: String {
@@ -121,9 +175,11 @@ public struct MatrixVerdict: Equatable, Sendable {
  *  - busca acima do limite (curta→longa conforme a distância da viagem);
  *  - nota do passageiro abaixo da mínima (quando lida);
  *  - R$/h abaixo do piso (quando há tempos);
+ *  - R$/min abaixo do piso por minuto (tempos do chamado; padrão R$ 1,00/min);
  *  - destino de periferia pagando menos que o mínimo de periferia;
  *  - destino intermunicipal pagando menos que o mínimo da cidade.
- * Amarelo: R$/km na faixa amarela, ou R$/h entre o piso e o ideal.
+ * Amarelo: R$/km na faixa amarela, R$/h entre o piso e o ideal, ou dinâmico de fachada
+ * (o total passa, mas o valor sem o dinâmico não passaria no R$/km de aceite e no piso por minuto).
  * Zona quente: o amarelo vira verde. Periferia: sempre com o alerta de volta vazia.
  * Intermunicipal com o mínimo atingido: o R$/km da faixa não se aplica (o mínimo já embute a volta vazia).
  */
@@ -190,7 +246,40 @@ public struct AcceptanceMatrix: Sendable {
             shortRefusals.append("Nota baixa: \(Br.decimal(rating)) · mínimo \(Br.decimal(rule.minRating))")
         }
 
-        // 5. Hora
+        // 5. Minuto: piso por minuto, com os tempos que aparecem no chamado (o motorista confere de cabeça).
+        let shownMinutes: Double? = {
+            if let p = offer.pickupTimeMin, let t = offer.tripTimeMin, p + t > 0 { return p + t }
+            return nil
+        }()
+        let perMinute = shownMinutes.map { fare / $0 }
+        if m.minPerMinute > 0, !intercityOK, let perMinute, perMinute < m.minPerMinute - eps {
+            refusals.append("\(Br.money(perMinute))/min abaixo do piso de \(Br.money(m.minPerMinute))/min")
+            shortRefusals.append("Minuto baixo: \(Br.decimal(perMinute)) · piso \(Br.decimal(m.minPerMinute))")
+        }
+
+        // 6. Dinâmico: o valor sem ele precisa passar nas réguas; senão é dinâmico de fachada.
+        var surge: SurgeCheck?
+        let totalKm = pickupKm + tripKm
+        if m.checkSurge, let amount = offer.surgeAmount, amount > 0.009, amount < fare * 0.8, totalKm > 0 {
+            let base = fare - amount
+            let basePerKm = base / totalKm
+            let basePerMinute = shownMinutes.map { base / $0 }
+            let byKm = rule.acceptPerKm * totalKm
+            let byMinute = m.minPerMinute > 0 ? (shownMinutes.map { m.minPerMinute * $0 } ?? 0) : 0
+            let minimumBase = intercityOK ? min(base, zone.minimumFare ?? base) : max(byKm, byMinute)
+            let real = base >= minimumBase - eps
+            let extra = max(0, min(amount, fare - minimumBase))
+            surge = SurgeCheck(amount: amount, baseFare: base, basePerKm: basePerKm, basePerMinute: basePerMinute,
+                               minimumBase: minimumBase, fairFare: minimumBase + amount, real: real, extraGain: real ? amount : extra)
+            if !real && refusals.isEmpty {
+                let what = [Br.perKm(basePerKm), basePerMinute.map { "\(Br.money($0))/min" }].compactMap { $0 }.joined(separator: " · ")
+                cautions.append("dinâmico de fachada: sem os \(Br.money(amount)) de dinâmico seria \(Br.money(base)) (\(what)); "
+                                + "o justo com dinâmico seria \(Br.money(minimumBase + amount))")
+                shortCautions.append("Dinâmico de fachada: sem ele \(Br.money(base)) · justo \(Br.money(minimumBase + amount))")
+            }
+        }
+
+        // 7. Hora
         if let perHour = r.revenuePerHour {
             if perHour < m.hourFloor - eps {
                 refusals.append("\(Br.perHour(perHour)) abaixo do piso de \(Br.perHour(m.hourFloor))")
@@ -203,12 +292,15 @@ public struct AcceptanceMatrix: Sendable {
 
         var classification: Classification = !refusals.isEmpty ? .red : (cautions.isEmpty ? .green : .yellow)
         var promoted = false
-        if classification == .yellow, zone.kind == .hot {
+        let fakeSurge = surge.map { !$0.real } ?? false
+        // Zona quente libera o amarelo, menos o dinâmico de fachada (aí o motorista precisa decidir).
+        if classification == .yellow, zone.kind == .hot, !fakeSurge {
             classification = .green
             promoted = true
         }
 
-        let numbers = DecisionEngine.joinPt([Br.perKm(perKm), r.revenuePerHour.map { Br.perHour($0) }].compactMap { $0 })
+        let numbers = DecisionEngine.joinPt([Br.perKm(perKm), r.revenuePerHour.map { Br.perHour($0) },
+                                             perMinute.map { "\(Br.money($0))/min" }].compactMap { $0 })
         let headline: String
         switch classification {
         case .red:
@@ -224,11 +316,17 @@ public struct AcceptanceMatrix: Sendable {
                 headline = "Aceitar: \(numbers)."
             }
         }
+        var finalHeadline = headline
+        if let surge, surge.real, classification != .red {
+            finalHeadline += " Dinâmico real: os \(Br.money(surge.amount)) são lucro a mais."
+        }
+        if fakeSurge, alert == nil { alert = "Dinâmico de fachada" }
 
         let required = zone.kind == .periphery ? max(rule.acceptPerKm, m.zones.peripheryMinPerKm)
             : (zone.kind == .hot ? rule.yellowPerKm : rule.acceptPerKm)
         return MatrixVerdict(classification: classification, rideClass: cls, zone: zone, pickupLimitKm: pickupLimit,
                              requiredPerKm: required, refusals: refusals, cautions: cautions,
-                             shortRefusals: shortRefusals, shortCautions: shortCautions, alert: alert, headline: headline)
+                             shortRefusals: shortRefusals, shortCautions: shortCautions, alert: alert, headline: finalHeadline,
+                             perMinute: perMinute, surge: surge)
     }
 }

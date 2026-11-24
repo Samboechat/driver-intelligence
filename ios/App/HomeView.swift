@@ -399,10 +399,11 @@ struct VerdictBlock: View {
             }
             HStack {
                 Stat(title: "R$/km", value: Br.decimal(record.revenuePerKm), color: record.cls.color)
+                Stat(title: "R$/min", value: Br.decimal(record.perMinute))
                 Stat(title: "R$/h", value: Br.decimal(record.revenuePerHour, 0))
-                Stat(title: "Busca", value: Br.km(record.pickupKm))
                 Stat(title: "Lucro", value: Br.money(record.profit))
             }
+            record.surgeBox
             if let reasons = record.reasons, !reasons.isEmpty {
                 ForEach(reasons.prefix(3), id: \.self) { r in
                     Label(r, systemImage: record.cls == .red ? "xmark.circle.fill" : "exclamationmark.circle.fill")
@@ -411,10 +412,10 @@ struct VerdictBlock: View {
             } else if record.cls != .green {
                 Text(record.headline).font(.footnote).foregroundStyle(record.cls.color)
             }
-            if let alert = record.alert {
+            if let alert = record.alert, !(record.surgeReal == false && alert == "Dinâmico de fachada") {
                 Label(alert, systemImage: "exclamationmark.triangle.fill").font(.footnote.weight(.semibold)).foregroundStyle(Palette.warning)
             }
-            let tags = [record.category, record.rating.map { "★ \(Br.decimal($0))" }, record.zoneKind?.label, Br.oneLine(record.destination)].compactMap { $0 }
+            let tags = [record.category, record.pickupKm.map { "busca \(Br.km($0))" }, record.rating.map { "★ \(Br.decimal($0))" }, record.zoneKind?.label, Br.oneLine(record.destination)].compactMap { $0 }
             if !tags.isEmpty {
                 Text(tags.joined(separator: " · ")).font(.caption).foregroundStyle(.secondary).lineLimit(2)
             }
@@ -431,7 +432,7 @@ struct HelpView: View {
                 VStack(alignment: .leading, spacing: 16) {
                     help("1. Ligue a leitura", "O iPhone não permite janelas por cima de outros apps. Por isso o app usa a transmissão de tela do iOS: toque em Ligar leitura e depois em Iniciar Transmissão. Um indicador vermelho no topo mostra que está ligada.")
                     help("2. Abra o Uber Driver", "Quando um chamado tocar, o app lê o cartão, aplica a sua matriz de aceite e manda uma notificação em cerca de 2 segundos.")
-                    help("3. Leia a notificação", "Título: o veredito (ACEITAR, AVALIAR ou RECUSAR) e o valor. Abaixo: R$/km, R$/h e a categoria. Quando não é para aceitar, a linha com ✖︎ ou • diz o motivo. Cada veredito tem um som diferente.")
+                    help("3. Leia a notificação", "Título: o veredito (ACEITAR, AVALIAR ou RECUSAR) e o valor. Abaixo: R$/km, R$/min, R$/h e a categoria (ou ⚡ com o valor do dinâmico). Quando não é para aceitar, a linha com ✖︎ ou • diz o motivo. Cada veredito tem um som diferente.")
                     help("4. Aceitou?", "O app percebe sozinho pela tela seguinte. Se não perceber, segure a notificação do chamado e toque em \"Aceitei esta corrida\". O app nunca aceita nem recusa por você.")
                     help("Privacidade", "A leitura é feita no próprio iPhone. Cada quadro é descartado depois de lido; prints só são guardados se você ligar nos Ajustes. Nada é enviado para a internet.")
                 }
