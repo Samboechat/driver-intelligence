@@ -26,10 +26,23 @@ struct DashboardView: View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 14) {
+                    TodayPaceCard(settings: settings, trips: trips, now: now)
                     weekCard
                     shiftCard
                     mileageCard
                     decisionsCard
+                    NavigationLink { BestHoursView() } label: {
+                        Card {
+                            HStack {
+                                Label("Melhores horários", systemImage: "chart.bar.xaxis").font(.headline)
+                                Spacer()
+                                Image(systemName: "chevron.right").foregroundStyle(.secondary)
+                            }
+                            Text("Quantos chamados chegam e quanto pagam em cada hora, pelo seu histórico.")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                    .buttonStyle(.plain)
                     if !shifts.filter({ !$0.isOpen }).isEmpty { shiftsCard }
                 }
                 .padding(16)

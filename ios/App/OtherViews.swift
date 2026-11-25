@@ -375,7 +375,20 @@ struct SettingsView: View {
                     Text("A ilha mostra R$/km e R$/h de cada chamado, na cor do veredito. Ela é aberta pelo app e só recebe os chamados enquanto o app está acordado; é o GPS do turno que mantém o app acordado com o Uber na frente, além de contar os km rodados. Com o turno automático, o turno fecha sozinho com a leitura desligada e o carro parado há 20 minutos.")
                 }
                 Section {
-                    NumberField(title: "Meta diária", value: $s.dailyGoal, suffix: "R$")
+                    NumberField(title: "Meta do dia (vazio = semana ÷ dias)", value: $s.dailyGoal, suffix: "R$")
+                    Stepper("Dias de trabalho por semana: \(s.daily.workdays)", value: $s.daily.workdays, in: 1...7)
+                    Picker("Turno acaba às", selection: $s.daily.endHour) {
+                        ForEach(0..<24, id: \.self) { Text(String(format: "%02d:00", $0)).tag($0) }
+                    }
+                    Toggle("Avisar meta batida e reta final", isOn: $s.goalAlerts)
+                    Toggle("Falar o veredito de cada chamado", isOn: $s.voiceAnnounce)
+                    Toggle("Rodo de Comfort", isOn: $s.comfortDriver)
+                } header: {
+                    Text("Meta do dia e voz")
+                } footer: {
+                    Text("Meta do dia hoje: \(Br.money(s.plan.dailyGoal(weekly: s.weeklyGoal))). A notificação mostra o lucro do chamado, o preço base (o mínimo para não ter prejuízo) e o valor que mantém o ritmo da meta até o fim do turno. Corridas antes das 6h contam no dia anterior. A voz sai pelo som do carro.")
+                }
+                Section {
                     Toggle("Detectar aceite e recusa", isOn: $s.autoTrack)
                     Toggle("Registrar corridas concluídas", isOn: $s.autoRegisterTrips)
                     Toggle("Resumo ao fim de cada corrida", isOn: $s.notifyTripSummary)

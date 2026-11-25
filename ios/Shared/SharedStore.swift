@@ -53,8 +53,23 @@ struct DriverSettings: Codable, Equatable {
     var gpsTracking: Bool = true
     /// Abrir o turno sozinho ao ligar a leitura (e fechar com o carro parado e a leitura desligada).
     var autoShift: Bool = true
+    /// Dias de trabalho por semana e fim do turno (a meta do dia é `dailyGoal`, ou a semana ÷ dias).
+    var daily = DailyPlan()
+    /// Falar o veredito de cada chamado (som do carro / CarPlay).
+    var voiceAnnounce: Bool = true
+    /// Avisar quando bater a meta do dia e uma hora antes do fim do turno.
+    var goalAlerts: Bool = true
+    /// Roda de Comfort (o guia de regiões dá peso ao perfil Comfort).
+    var comfortDriver: Bool = true
     /// Versão dos ajustes salvos (para migrar padrões).
     var schema: Int = 2
+
+    /// Meta do dia com a meta diária dos ajustes.
+    var plan: DailyPlan {
+        var p = daily
+        p.goal = dailyGoal
+        return p
+    }
 
     init() {}
 
@@ -96,6 +111,10 @@ struct DriverSettings: Codable, Equatable {
         islandAlert = v(.islandAlert, d.islandAlert)
         gpsTracking = v(.gpsTracking, d.gpsTracking)
         autoShift = v(.autoShift, d.autoShift)
+        daily = v(.daily, d.daily)
+        voiceAnnounce = v(.voiceAnnounce, d.voiceAnnounce)
+        goalAlerts = v(.goalAlerts, d.goalAlerts)
+        comfortDriver = v(.comfortDriver, d.comfortDriver)
         // Ajustes salvos antes da versão 2: os prints passam a ser opcionais e começam desligados.
         if v(.schema, 1) < 2 {
             saveScreenshots = false
@@ -511,5 +530,21 @@ enum SharedStore {
             out += "oferta;\(df.string(from: o.date));\(n(o.fare));\(o.category ?? "");\(n(o.totalKm, 1));\(n(o.totalMin, 0));\(n(o.realisticMin, 0));\(n(o.revenuePerKm));\(n(o.revenuePerHour));\(n(o.profit));\(o.cls.label);\(o.result?.label ?? "");\(o.verdict ?? "");\(o.zoneKind?.label ?? "");\((Br.oneLine(o.destination) ?? "").replacingOccurrences(of: ";", with: ","))\r\n"
         }
         return out
+    }
+}
+
+
+// MARK: - Meta do dia
+
+enum PaceNow {
+    /// Como está o dia agora, pelas corridas concluídas.
+    static func status(_ settings: DriverSettings, trips: [TripRecord] = SharedStore.trips, now: Date = Date()) -> PaceStatus {
+        let earned = DailyPace.earned(trips.compactMap { t in t.fare.map { (t.completedAt, $0) } }, now: now, plan: settings.plan)
+        return DailyPace.status(earned: earned, now: now, plan: settings.plan, weekly: settings.weeklyGoal)
+    }
+
+    /// Lucro, preço base e valor da meta de um chamado.
+    static func economics(_ a: OfferAnalysis, settings: DriverSettings, pace: PaceStatus) -> OfferEconomics {
+        OfferEconomics.of(a, costPerKm: settings.matrix.costPerKm, neededPerHour: pace.neededPerHour, hourFloor: settings.matrix.hourFloor)
     }
 }

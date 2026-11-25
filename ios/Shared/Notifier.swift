@@ -34,7 +34,9 @@ enum Notifier {
 
     /// `record`: o chamado como vai para o histórico (viaja junto, para o app conseguir salvá-lo).
     static func post(_ a: OfferAnalysis, settings: DriverSettings, identifier: String, screenshot: URL? = nil, record: OfferRecord? = nil) {
-        let c = NotificationFormatter.format(a, goals: settings.goals, hourFloor: settings.hourFloor)
+        let pace = PaceNow.status(settings)
+        let c = NotificationFormatter.format(a, goals: settings.goals, hourFloor: settings.hourFloor,
+                                             econ: PaceNow.economics(a, settings: settings, pace: pace), pace: pace)
         let content = UNMutableNotificationContent()
         content.title = c.title
         content.subtitle = c.subtitle

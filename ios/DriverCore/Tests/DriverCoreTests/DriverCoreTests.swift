@@ -263,16 +263,20 @@ final class NotificationTests: XCTestCase {
     func testFormatoDaNotificacao() {
         let a = OfferAnalyzer().analyze(frame: .fromText("UberX\nR$ 19,20\n4 min (1,2 km) de distância\nViagem: 20 min (7,7 km)"), context: ctx)!
         let c = NotificationFormatter.format(a, goals: ctx.goals)
-        XCTAssertEqual(c.title, "🟢 RENTÁVEL · R$ 19,20")
-        XCTAssertEqual(c.subtitle, "R$ 2,16/km · R$ 48/h · UberX")
-        XCTAssertEqual(c.body, "Lucro R$ 14,18 · Total 8,9 km em 24 min")
+        XCTAssertEqual(c.title, "🟢 RENTÁVEL · Lucro R$ 14,18")
+        XCTAssertEqual(c.subtitle, "R$ 19,20 · 2,16/km · R$ 48/h · UberX")
+        XCTAssertEqual(c.body, "Lucro R$ 14,18")
     }
 
     func testTempoRealistaNaNotificacao() {
         var c2 = ctx
         c2.useRealisticTime = true
         let a = OfferAnalyzer().analyze(frame: .fromText("R$ 19,20\n4 min (1,2 km) de distância\nViagem: 20 min (7,7 km)"), context: c2)!
-        XCTAssertTrue(NotificationFormatter.format(a, goals: c2.goals).body.contains("Total 8,9 km em ~28 min"))
+        // O tempo realista entra no valor da meta (mais minutos = valor maior).
+        let shown = OfferEconomics.of(OfferAnalyzer().analyze(frame: .fromText("R$ 19,20\n4 min (1,2 km) de distância\nViagem: 20 min (7,7 km)"), context: ctx)!,
+                                      costPerKm: 0.5, neededPerHour: 60, hourFloor: 42)
+        let real = OfferEconomics.of(a, costPerKm: 0.5, neededPerHour: 60, hourFloor: 42)
+        XCTAssertGreaterThan(real.goalFare!, shown.goalFare!)
     }
 
     func testPortaoNaoRepeteEConfirmaLeituraFraca() {

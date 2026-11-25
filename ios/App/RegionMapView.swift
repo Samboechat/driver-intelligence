@@ -2,99 +2,50 @@ import SwiftUI
 import MapKit
 import DriverCore
 
-// MARK: - Áreas de Sorocaba e região
+// MARK: - Posição real dos polos (busca no mapa da Apple, uma vez)
 
-/// Área desenhada no mapa. As posições são aproximadas (centro do bairro/cidade + raio).
-struct MapArea: Identifiable {
-    enum Kind { case hot, periphery, intercity }
-    var id: String { name }
-    var name: String
-    var kind: Kind
-    var lat: Double
-    var lon: Double
-    var radius: Double
-    var minimumFare: Double? = nil
+/// Os polos do guia têm uma posição aproximada; na primeira abertura o app procura cada um no mapa da Apple
+/// e guarda a posição exata. Sem internet, fica a aproximada.
+final class HubLocator: ObservableObject {
+    static let shared = HubLocator()
+    @Published private(set) var hubs: [DemandHub] = DemandGuide.hubs
+    private let key = "hubCoords.v1"
+    private var running = false
 
-    var coordinate: CLLocationCoordinate2D { .init(latitude: lat, longitude: lon) }
+    init() { apply(UserDefaults.standard.dictionary(forKey: key) as? [String: [Double]] ?? [:]) }
 
-    var color: Color {
-        switch kind {
-        case .hot: return Palette.positive
-        case .periphery: return Palette.warning
-        case .intercity: return .blue
+    private func apply(_ cache: [String: [Double]]) {
+        hubs = DemandGuide.hubs.map { h in
+            var h = h
+            if let c = cache[h.id], c.count == 2 { h.lat = c[0]; h.lon = c[1] }
+            return h
         }
     }
 
-    var label: String {
-        switch kind {
-        case .hot: return "Zona quente"
-        case .periphery: return "Periferia · volta vazia"
-        case .intercity: return "Intermunicipal · mínimo \(Br.money(minimumFare))"
-        }
-    }
-
-    func contains(_ c: CLLocationCoordinate2D) -> Bool {
-        CLLocation(latitude: lat, longitude: lon).distance(from: CLLocation(latitude: c.latitude, longitude: c.longitude)) <= radius
-    }
-
-    static let sorocaba: [MapArea] = [
-        // Zonas quentes (aprovam o amarelo)
-        MapArea(name: "Campolim", kind: .hot, lat: -23.5317, lon: -47.4680, radius: 1300),
-        MapArea(name: "Iguatemi", kind: .hot, lat: -23.5378, lon: -47.4590, radius: 700),
-        MapArea(name: "Alto da Boa Vista", kind: .hot, lat: -23.5190, lon: -47.4740, radius: 900),
-        MapArea(name: "Mangal", kind: .hot, lat: -23.5240, lon: -47.4560, radius: 800),
-        MapArea(name: "Jardim Emília", kind: .hot, lat: -23.5080, lon: -47.4700, radius: 700),
-        // Periferia (mínimo R$ 2,20/km e alerta de volta vazia)
-        MapArea(name: "Zona Norte", kind: .periphery, lat: -23.4580, lon: -47.4560, radius: 3200),
-        MapArea(name: "Éden", kind: .periphery, lat: -23.4180, lon: -47.4200, radius: 2000),
-        MapArea(name: "Cajuru", kind: .periphery, lat: -23.5250, lon: -47.5150, radius: 1800),
-        MapArea(name: "Votorantim", kind: .periphery, lat: -23.5460, lon: -47.4380, radius: 2800),
-        // Cidades da região (valor mínimo para aceitar)
-        MapArea(name: "Itu", kind: .intercity, lat: -23.2640, lon: -47.2990, radius: 4500, minimumFare: 128),
-        MapArea(name: "Salto", kind: .intercity, lat: -23.2000, lon: -47.2870, radius: 3500, minimumFare: 168),
-        MapArea(name: "Viracopos", kind: .intercity, lat: -23.0074, lon: -47.1345, radius: 2500, minimumFare: 360),
-    ]
-
-    /// Sorocaba e região: o mapa não sai daqui.
-    static let bounds = MKCoordinateRegion(
-        center: .init(latitude: -23.40, longitude: -47.40),
-        span: .init(latitudeDelta: 0.95, longitudeDelta: 0.95)
-    )
-    static let start = MKCoordinateRegion(
-        center: .init(latitude: -23.5015, longitude: -47.4526),
-        span: .init(latitudeDelta: 0.16, longitudeDelta: 0.16)
-    )
-}
-
-// MARK: - Chamados com posição
-
-struct MapOffer: Identifiable {
-    var record: OfferRecord
-    var coordinate: CLLocationCoordinate2D
-    var id: String { record.id }
-}
-
-/// Faixas de horário para o filtro.
-enum DayBand: Int, CaseIterable, Identifiable {
-    case all, morning, afternoon, night, dawn
-    var id: Int { rawValue }
-    var label: String {
-        switch self {
-        case .all: return "Todos"
-        case .morning: return "Manhã"
-        case .afternoon: return "Tarde"
-        case .night: return "Noite"
-        case .dawn: return "Madrug."
-        }
-    }
-    func contains(_ d: Date) -> Bool {
-        let h = Calendar.current.component(.hour, from: d)
-        switch self {
-        case .all: return true
-        case .morning: return (6..<12).contains(h)
-        case .afternoon: return (12..<18).contains(h)
-        case .night: return (18..<24).contains(h)
-        case .dawn: return (0..<6).contains(h)
+    func refine() {
+        guard !running else { return }
+        var cache = UserDefaults.standard.dictionary(forKey: key) as? [String: [Double]] ?? [:]
+        let missing = DemandGuide.hubs.filter { cache[$0.id] == nil }
+        guard !missing.isEmpty else { return }
+        running = true
+        Task { @MainActor in
+            for hub in missing {
+                let req = MKLocalSearch.Request()
+                req.naturalLanguageQuery = hub.query
+                req.region = MKCoordinateRegion(center: .init(latitude: hub.lat, longitude: hub.lon),
+                                                latitudinalMeters: 20_000, longitudinalMeters: 20_000)
+                if let item = try? await MKLocalSearch(request: req).start().mapItems.first {
+                    let c = item.placemark.coordinate
+                    let off = CLLocation(latitude: c.latitude, longitude: c.longitude)
+                        .distance(from: CLLocation(latitude: hub.lat, longitude: hub.lon))
+                    // Resultado muito longe do esperado é outro lugar com o mesmo nome.
+                    if off < 12_000 { cache[hub.id] = [c.latitude, c.longitude] }
+                }
+                try? await Task.sleep(nanoseconds: 400_000_000)
+            }
+            UserDefaults.standard.set(cache, forKey: key)
+            apply(cache)
+            running = false
         }
     }
 }
@@ -106,208 +57,293 @@ struct RegionMapTab: View {
         if #available(iOS 17.0, *) {
             RegionMapView()
         } else {
-            VStack(spacing: 12) {
-                Image(systemName: "map").font(.largeTitle)
-                Text("O mapa precisa do iOS 17 ou mais novo.").foregroundStyle(.secondary)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(Palette.background.ignoresSafeArea())
+            NavigationStack { GuideList(hubs: DemandGuide.hubs) }
         }
+    }
+}
+
+extension HubAdvice.Verdict {
+    var color: Color {
+        switch self {
+        case .here: return .blue
+        case .go: return Palette.positive
+        case .maybe: return Palette.warning
+        case .skip: return .gray
+        }
+    }
+}
+
+func levelColor(_ l: Int) -> Color {
+    switch l {
+    case 3: return Palette.positive
+    case 2: return Palette.warning
+    case 1: return .gray
+    default: return .gray.opacity(0.5)
     }
 }
 
 @available(iOS 17.0, *)
 struct RegionMapView: View {
-    @State private var camera: MapCameraPosition = .region(MapArea.start)
-    @State private var offers: [MapOffer] = []
-    @State private var days = 7
-    @State private var band = DayBand.all
-    @State private var showZones = true
-    @State private var selectedOffer: String?
-    @State private var selectedArea: MapArea?
-    @StateObject private var gps = LocationService.shared
+    @StateObject private var locator = HubLocator.shared
+    @ObservedObject private var gps = LocationService.shared
+    @State private var camera: MapCameraPosition = .region(MKCoordinateRegion(
+        center: .init(latitude: -23.5015, longitude: -47.4526), span: .init(latitudeDelta: 0.17, longitudeDelta: 0.17)))
+    @State private var useNow = true
+    @State private var chosen = Date()
+    @State private var now = Date()
+    @State private var selected: String?
+    @State private var showOffers = false
+    @State private var expanded = false
 
-    private var shown: [MapOffer] {
-        let since = Calendar.current.date(byAdding: .day, value: -days, to: Date()) ?? .distantPast
-        return offers.filter { $0.record.date >= since && band.contains($0.record.date) }
+    private var at: Date { useNow ? now : chosen }
+    private var settings: DriverSettings { SharedStore.settings }
+
+    private var here: GeoPoint? {
+        gps.lastLocation.map { GeoPoint(lat: $0.coordinate.latitude, lon: $0.coordinate.longitude, accuracy: 0, time: 0) }
+    }
+
+    private var samples: [HubSample] {
+        let geo = SharedStore.offerGeo
+        return SharedStore.history.compactMap { r in
+            guard let p = geo[r.id], p.count >= 2 else { return nil }
+            return HubSample(date: r.date, lat: p[0], lon: p[1], perKm: r.revenuePerKm, green: r.cls == .green)
+        }
+    }
+
+    private func advice() -> [HubAdvice] {
+        let s = settings
+        let rule = s.comfortDriver ? s.matrix.comfort : s.matrix.standard
+        return DemandGuide.advice(at: at, from: useNow ? here : nil, samples: samples, comfortDriver: s.comfortDriver,
+                                  acceptPerKm: rule.acceptPerKm, costPerKm: s.matrix.costPerKm, hubs: locator.hubs)
     }
 
     var body: some View {
+        let list = advice()
         NavigationStack {
             ZStack(alignment: .bottom) {
-                map
-                VStack(spacing: 8) {
-                    if let id = selectedOffer, let o = shown.first(where: { $0.id == id }) {
-                        offerCard(o.record)
-                    } else if let a = selectedArea {
-                        areaCard(a)
-                    }
-                    summaryBar
-                }
-                .padding(12)
+                map(list)
+                panel(list).padding(10)
             }
-            .navigationTitle("Mapa")
+            .navigationTitle("Onde rodar")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
-                    Button { withAnimation { camera = .region(MapArea.start) } } label: { Image(systemName: "scope") }
+                    Menu {
+                        Toggle("Mostrar meus chamados", isOn: $showOffers)
+                        NavigationLink("Guia completo por dia e horário") { GuideList(hubs: locator.hubs) }
+                    } label: { Image(systemName: "ellipsis.circle") }
                 }
-                ToolbarItem(placement: .navigationBarTrailing) { filterMenu }
+                ToolbarItem(placement: .navigationBarTrailing) { timePicker }
             }
-            .onAppear(perform: load)
-            .onReceive(Timer.publish(every: 10, on: .main, in: .common).autoconnect()) { _ in load() }
+            .onAppear { locator.refine(); now = Date() }
+            .onReceive(Timer.publish(every: 60, on: .main, in: .common).autoconnect()) { now = $0 }
         }
     }
 
-    private var map: some View {
-        Map(position: $camera, bounds: MapCameraBounds(centerCoordinateBounds: MapArea.bounds,
-                                                        minimumDistance: 1200, maximumDistance: 140_000),
-            selection: $selectedOffer) {
-            UserAnnotation()
-            if showZones {
-                ForEach(MapArea.sorocaba) { a in
-                    MapCircle(center: a.coordinate, radius: a.radius)
-                        .foregroundStyle(a.color.opacity(0.18))
-                        .stroke(a.color.opacity(0.7), lineWidth: 1.5)
-                    Annotation(a.name, coordinate: a.coordinate, anchor: .center) {
-                        Button { selectedOffer = nil; selectedArea = a } label: {
-                            Image(systemName: a.kind == .hot ? "flame.fill" : (a.kind == .periphery ? "arrow.uturn.backward" : "signpost.right.fill"))
-                                .font(.caption.bold())
-                                .foregroundStyle(.white)
-                                .padding(6)
-                                .background(Circle().fill(a.color))
-                        }
-                    }
-                    .annotationTitles(.visible)
-                }
+    private var timePicker: some View {
+        HStack(spacing: 6) {
+            if useNow {
+                Button("Agora ▾") { chosen = now; useNow = false }.font(.subheadline.weight(.semibold))
+            } else {
+                DatePicker("", selection: $chosen, displayedComponents: [.date, .hourAndMinute])
+                    .labelsHidden()
+                    .environment(\.locale, Locale(identifier: "pt_BR"))
+                Button { useNow = true } label: { Image(systemName: "arrow.uturn.backward.circle") }
             }
-            ForEach(shown) { o in
-                Marker(Br.money(o.record.fare), systemImage: o.record.surge != nil ? "bolt.fill" : "car.fill",
-                       coordinate: o.coordinate)
-                    .tint(o.record.cls.color)
-                    .tag(o.id)
+        }
+    }
+
+    private func map(_ list: [HubAdvice]) -> some View {
+        let geo = SharedStore.offerGeo
+        let offers = showOffers ? Array(SharedStore.history.prefix(300).filter { geo[$0.id] != nil }) : []
+        return Map(position: $camera,
+                   bounds: MapCameraBounds(centerCoordinateBounds: MKCoordinateRegion(
+                    center: .init(latitude: -23.48, longitude: -47.45), span: .init(latitudeDelta: 0.5, longitudeDelta: 0.5)),
+                                           minimumDistance: 1500, maximumDistance: 80_000),
+                   selection: $selected) {
+            UserAnnotation()
+            ForEach(list) { a in
+                MapCircle(center: .init(latitude: a.hub.lat, longitude: a.hub.lon), radius: a.hub.radiusKm * 1000)
+                    .foregroundStyle(levelColor(a.level).opacity(a.level >= 2 ? 0.28 : 0.12))
+                    .stroke(levelColor(a.level), lineWidth: a.level >= 2 ? 2 : 1)
+                Marker(a.hub.name, systemImage: icon(a.hub), coordinate: .init(latitude: a.hub.lat, longitude: a.hub.lon))
+                    .tint(levelColor(a.level))
+                    .tag(a.id)
+            }
+            ForEach(offers) { r in
+                if let p = geo[r.id], p.count >= 2 {
+                    Annotation("", coordinate: .init(latitude: p[0], longitude: p[1])) {
+                        Circle().fill(r.cls.color).frame(width: 9, height: 9).overlay(Circle().stroke(.white, lineWidth: 1))
+                    }
+                }
             }
         }
         .mapStyle(.standard(pointsOfInterest: .excludingAll))
-        .mapControls {
-            MapUserLocationButton()
-            MapCompass()
-            MapScaleView()
-        }
-        .onChange(of: selectedOffer) { _, v in if v != nil { selectedArea = nil } }
+        .mapControls { MapUserLocationButton(); MapCompass() }
     }
 
-    private var filterMenu: some View {
-        Menu {
-            Picker("Período", selection: $days) {
-                Text("Hoje").tag(1)
-                Text("7 dias").tag(7)
-                Text("30 dias").tag(30)
-                Text("Tudo").tag(3650)
-            }
-            Picker("Horário", selection: $band) {
-                ForEach(DayBand.allCases) { Text($0.label).tag($0) }
-            }
-            Toggle("Mostrar zonas", isOn: $showZones)
-        } label: {
-            Image(systemName: "line.3.horizontal.decrease.circle")
+    private func icon(_ h: DemandHub) -> String {
+        switch h.id {
+        case "iguatemi", "ciane", "cidade", "sorocabashopping": return "bag.fill"
+        case "uniso", "facens", "ufscar": return "graduationcap.fill"
+        case "unimed", "santacasa", "regional": return "cross.case.fill"
+        case "rodoviaria": return "bus.fill"
+        case "eden": return "building.2.fill"
+        default: return h.comfort == 2 ? "star.fill" : "house.fill"
         }
     }
 
-    // MARK: Cartões
+    // MARK: Painel
 
-    private var summaryBar: some View {
-        let list = shown
-        let green = list.filter { $0.record.cls == .green }.count
-        let perKm = list.compactMap(\.record.revenuePerKm)
-        let avg = perKm.isEmpty ? nil : perKm.reduce(0, +) / Double(perKm.count)
-        return HStack(spacing: 14) {
-            stat("\(list.count)", "chamados")
-            stat("\(green)", "p/ aceitar", Palette.positive)
-            stat(Br.decimal(avg), "R$/km médio")
+    @ViewBuilder private func panel(_ list: [HubAdvice]) -> some View {
+        if let id = selected, let a = list.first(where: { $0.id == id }) {
+            HubCard(a: a) { selected = nil }
+        } else {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Text(useNow ? "Melhores agora" : "Melhores em \(at.formatted(.dateTime.weekday(.wide).hour().minute().locale(Locale(identifier: "pt_BR"))))")
+                        .font(.headline)
+                    Spacer()
+                    Button(expanded ? "Menos" : "Mais") { withAnimation { expanded.toggle() } }.font(.caption)
+                }
+                ForEach(Array(list.prefix(expanded ? 8 : 3))) { a in
+                    Button { selected = a.id } label: { AdviceRow(a: a) }.buttonStyle(.plain)
+                }
+                if useNow && here == nil {
+                    Text("Ligue a localização para o app pesar a distância até cada região.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            .padding(12)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
+        }
+    }
+}
+
+struct AdviceRow: View {
+    var a: HubAdvice
+    var body: some View {
+        HStack(spacing: 10) {
+            RoundedRectangle(cornerRadius: 2).fill(levelColor(a.level)).frame(width: 4, height: 34)
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 6) {
+                    Text(a.hub.name).font(.subheadline.weight(.semibold))
+                    if a.hub.comfort == 2 { Image(systemName: "star.fill").font(.caption2).foregroundStyle(Palette.warning) }
+                }
+                Text(subtitle).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+            }
             Spacer()
-            Text(band == .all ? periodLabel : "\(periodLabel) · \(band.label)")
-                .font(.caption2).foregroundStyle(.secondary)
-        }
-        .padding(12)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14))
-        .overlay {
-            if offers.isEmpty {
-                Text(gps.authorized
-                     ? "Os chamados aparecem aqui conforme chegam (onde o carro estava)."
-                     : "Permita a localização nos Ajustes para marcar os chamados no mapa.")
-                    .font(.caption).multilineTextAlignment(.center)
-                    .padding(12).frame(maxWidth: .infinity)
-                    .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14))
+            VStack(alignment: .trailing, spacing: 2) {
+                Text(a.verdict.label).font(.caption.weight(.heavy)).foregroundStyle(a.verdict.color)
+                if let d = a.distanceKm { Text("\(Br.decimal(d, 1)) km").font(.caption2.monospacedDigit()).foregroundStyle(.secondary) }
             }
         }
+        .contentShape(Rectangle())
     }
 
-    private var periodLabel: String {
-        switch days {
-        case 1: return "Hoje"
-        case 7: return "7 dias"
-        case 30: return "30 dias"
-        default: return "Tudo"
+    private var subtitle: String {
+        if let w = a.window { return "\(DemandGuide.levelLabel(a.level)) · \(w.why)" }
+        if let n = a.nextPeak { return "Melhora às \(n.at.formatted(date: .omitted, time: .shortened)): \(n.window.why)" }
+        return "Sem movimento previsto"
+    }
+}
+
+struct HubCard: View {
+    var a: HubAdvice
+    var close: () -> Void
+
+    var body: some View {
+        let wd = Calendar.current.component(.weekday, from: a.arrival)
+        let wins = DemandGuide.windows(a.hub, weekday: wd)
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text(a.hub.name).font(.headline)
+                Text(a.verdict.label).font(.caption.weight(.heavy))
+                    .padding(.horizontal, 8).padding(.vertical, 2)
+                    .background(Capsule().fill(a.verdict.color.opacity(0.2))).foregroundStyle(a.verdict.color)
+                Spacer()
+                Button(action: close) { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }
+            }
+            HStack(spacing: 14) {
+                stat(a.levelLabel, "demanda", levelColor(a.level))
+                stat(["Baixo", "Médio", "Alto"][min(2, max(0, a.hub.comfort))], "perfil Comfort")
+                if let d = a.distanceKm { stat("\(Br.decimal(d, 1)) km", "chega \(a.arrival.formatted(date: .omitted, time: .shortened))") }
+                if let c = a.tripCost { stat(Br.money(c), "custo p/ ir") }
+            }
+            if let own = a.own {
+                Text("Seu histórico aqui neste horário: \(own.count) chamados · \(Br.percent(own.greenShare)) para aceitar · \(Br.decimal(own.avgPerKm))/km")
+                    .font(.caption.weight(.medium)).foregroundStyle(Palette.positive)
+            }
+            if let note = a.hub.note { Text(note).font(.caption).foregroundStyle(.secondary) }
+            if a.hub.periphery {
+                Label("Periferia: corrida que termina aqui volta vazia.", systemImage: "arrow.uturn.backward")
+                    .font(.caption).foregroundStyle(Palette.warning)
+            }
+            if !wins.isEmpty {
+                Text("Horários neste dia").font(.caption.weight(.semibold)).padding(.top, 2)
+                ForEach(Array(wins.enumerated()), id: \.offset) { _, w in
+                    HStack(spacing: 6) {
+                        Circle().fill(levelColor(w.level)).frame(width: 7, height: 7)
+                        Text(w.hours).font(.caption.monospacedDigit().weight(w == a.window ? .bold : .regular))
+                        Text(w.why).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    }
+                }
+            }
+            Text(a.hub.places.joined(separator: " · ")).font(.caption2).foregroundStyle(.secondary).lineLimit(2)
         }
+        .padding(14)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
     }
 
     private func stat(_ v: String, _ t: String, _ c: Color = .primary) -> some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text(v).font(.headline.monospacedDigit()).foregroundStyle(c)
+            Text(v).font(.subheadline.weight(.bold).monospacedDigit()).foregroundStyle(c)
             Text(t).font(.caption2).foregroundStyle(.secondary)
         }
     }
+}
 
-    private func offerCard(_ r: OfferRecord) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Text(r.date, format: .dateTime.weekday(.abbreviated).day().hour().minute())
-                    .font(.caption).foregroundStyle(.secondary)
-                Spacer()
-                Button { selectedOffer = nil } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }
-            }
-            VerdictBlock(record: r)
-        }
-        .padding(14)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
-    }
+/// Guia completo: todas as regiões, com os horários de cada dia da semana.
+struct GuideList: View {
+    var hubs: [DemandHub]
+    @State private var weekday = Calendar.current.component(.weekday, from: Date())
+    private let names = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"]
 
-    private func areaCard(_ a: MapArea) -> some View {
-        let inside = shown.filter { a.contains($0.coordinate) }
-        let perKm = inside.compactMap(\.record.revenuePerKm)
-        let perHour = inside.compactMap(\.record.revenuePerHour)
-        let avgKm = perKm.isEmpty ? nil : perKm.reduce(0, +) / Double(perKm.count)
-        let avgH = perHour.isEmpty ? nil : perHour.reduce(0, +) / Double(perHour.count)
-        let green = inside.filter { $0.record.cls == .green }.count
-        return VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Circle().fill(a.color).frame(width: 10, height: 10)
-                Text(a.name).font(.headline)
-                Spacer()
-                Button { selectedArea = nil } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }
+    var body: some View {
+        List {
+            Section {
+                Picker("Dia", selection: $weekday) {
+                    ForEach(1...7, id: \.self) { Text(names[$0 - 1]).tag($0) }
+                }
+                .pickerStyle(.segmented)
+            } footer: {
+                Text("Estimativa pelos polos que geram corrida: shoppings, faculdades, hospitais, rodoviária, bares, fábricas e bairros de perfil Comfort. Quando você tem 4 ou mais chamados numa região e horário, o mapa mistura com o seu histórico real.")
             }
-            Text(a.label).font(.caption).foregroundStyle(a.color)
-            if inside.isEmpty {
-                Text("Nenhum chamado recebido aqui no período.").font(.footnote).foregroundStyle(.secondary)
-            } else {
-                HStack(spacing: 16) {
-                    stat("\(inside.count)", "chamados")
-                    stat(inside.isEmpty ? "—" : Br.percent(Double(green) / Double(inside.count)), "p/ aceitar", Palette.positive)
-                    stat(Br.decimal(avgKm), "R$/km")
-                    stat(Br.decimal(avgH, 0), "R$/h")
+            ForEach(hubs) { h in
+                Section {
+                    let wins = DemandGuide.windows(h, weekday: weekday)
+                    if wins.isEmpty {
+                        Text("Sem horário forte neste dia").font(.caption).foregroundStyle(.secondary)
+                    }
+                    ForEach(Array(wins.enumerated()), id: \.offset) { _, w in
+                        HStack {
+                            Circle().fill(levelColor(w.level)).frame(width: 8, height: 8)
+                            Text(w.hours).font(.subheadline.monospacedDigit())
+                            Text(w.why).font(.subheadline).foregroundStyle(.secondary)
+                            Spacer()
+                            Text(DemandGuide.levelLabel(w.level)).font(.caption.weight(.bold)).foregroundStyle(levelColor(w.level))
+                        }
+                    }
+                    Text(h.places.joined(separator: " · ")).font(.caption2).foregroundStyle(.secondary)
+                } header: {
+                    HStack {
+                        Text(h.name)
+                        if h.comfort == 2 { Image(systemName: "star.fill").foregroundStyle(Palette.warning) }
+                        if h.periphery { Text("· periferia").foregroundStyle(Palette.warning) }
+                    }
                 }
             }
         }
-        .padding(14)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
-    }
-
-    private func load() {
-        let geo = SharedStore.offerGeo
-        offers = SharedStore.history.compactMap { r in
-            guard let p = geo[r.id], p.count >= 2 else { return nil }
-            return MapOffer(record: r, coordinate: .init(latitude: p[0], longitude: p[1]))
-        }
+        .navigationTitle("Guia de regiões")
     }
 }

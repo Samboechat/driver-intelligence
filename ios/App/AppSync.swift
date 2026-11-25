@@ -57,6 +57,7 @@ final class AppSync {
         let status = SharedStore.status
         let reading = ReadingState.current(status: status, capture: CaptureMonitor.shared, now: now)
         let gps = LocationService.shared
+        Coach.shared.check(settings: settings, now: now)
 
         // Turno automático: abre uma vez por gravação.
         if reading == .reading, settings.autoShift, let session = status.startedAt, SharedStore.autoShiftSession != session {

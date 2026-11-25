@@ -65,7 +65,7 @@ struct RootView: View {
             HomeView().tag(0).tabItem { Label("Início", systemImage: "bolt.fill") }
             DashboardView().tag(1).tabItem { Label("Painel", systemImage: "chart.pie.fill") }
             HistoryView().tag(2).tabItem { Label("Histórico", systemImage: "clock.arrow.circlepath") }
-            RegionMapTab().tag(5).tabItem { Label("Mapa", systemImage: "map.fill") }
+            RegionMapTab().tag(5).tabItem { Label("Onde rodar", systemImage: "map.fill") }
             // A aba de prints só existe com os prints ligados nos Ajustes.
             if showPrints {
                 CapturesView().tag(3).tabItem { Label("Prints", systemImage: "photo.on.rectangle.angled") }

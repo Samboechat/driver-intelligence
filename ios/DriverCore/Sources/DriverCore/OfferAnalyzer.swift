@@ -210,67 +210,71 @@ public enum NotificationFormatter {
         public var body: String
     }
 
-    /// `hourFloor` fica por compatibilidade; o veredito já considera o piso por hora.
-    public static func format(_ a: OfferAnalysis, goals: Goals, hourFloor: Double? = nil) -> Content {
+    /**
+     * Notificação enxuta, para ler num relance:
+     *   título     🟢 ACEITAR · Lucro R$ 14,20
+     *   subtítulo  R$ 22,00 · 2,30/km · 1,05/min · R$ 63/h
+     *   corpo      (motivo, só se não for ACEITAR)
+     *              Sem prejuízo R$ 4,80 · Meta R$ 18,40 ✓
+     *              (dinâmico / volta vazia, se houver)
+     *              Hoje R$ 182 de R$ 470 · precisa R$ 49/h até 03h
+     * `econ` e `pace` vêm do app (custo por km, meta do dia); sem eles, mostra só o que a análise tem.
+     */
+    public static func format(_ a: OfferAnalysis, goals: Goals, hourFloor: Double? = nil,
+                              econ: OfferEconomics? = nil, pace: PaceStatus? = nil) -> Content {
         let f = a.financial
         let b = a.basis
         let d = a.decision
         let mv = a.matrix
 
-        let verdict: String
-        switch d.classification {
-        case .gray: verdict = "CONFERIR"
-        default: verdict = mv?.label ?? d.classification.shortLabel
-        }
-        let title = "\(d.classification.dot) \(verdict) · \(Br.money(f.grossRevenue))"
+        let verdict = d.classification == .gray ? "CONFERIR" : (mv?.label ?? d.classification.shortLabel)
+        let profit = econ?.profit ?? f.operatingProfit
+        let title = profit.map { "\(d.classification.dot) \(verdict) · Lucro \(Br.money($0))" }
+            ?? "\(d.classification.dot) \(verdict) · \(Br.money(f.grossRevenue))"
 
-        let surge = mv?.surge
         var sub: [String] = []
-        if let rk = f.revenuePerKm { sub.append(Br.perKm(rk)) }
-        if let pm = mv?.perMinute { sub.append("\(Br.money(pm))/min") }
+        if profit != nil, let fare = f.grossRevenue { sub.append(Br.money(fare)) }
+        if let rk = f.revenuePerKm { sub.append("\(Br.decimal(rk))/km") }
+        if let pm = mv?.perMinute { sub.append("\(Br.decimal(pm))/min") }
         if let rh = b.revenuePerHour { sub.append("R$ \(Br.decimal(rh, 0))/h") }
-        if let surge {
-            sub.append("⚡+\(Br.money(surge.amount))")
-        } else if let c = a.offer.category {
-            sub.append(c)
-        }
+        if sub.count < 4, let c = a.offer.category { sub.append(c) }
 
         var lines: [String] = []
         if let mv {
             switch d.classification {
-            case .red: lines += mv.shortRefusals.prefix(2).map { "✖︎ \($0)" }
-            case .yellow: lines += mv.shortCautions.prefix(2).map { "• \($0)" }
+            case .red: if let r = mv.shortRefusals.first { lines.append("✖︎ \(r)") }
+            case .yellow: if let r = mv.shortCautions.first { lines.append("• \(r)") }
             default: break
             }
         } else if d.classification != .green {
             lines.append(d.headline)
         }
 
-        if let surge, surge.real {
-            var line = "⚡ Dinâmico real: +\(Br.money(surge.amount)) de lucro extra · sem ele \(Br.money(surge.baseFare))"
-            if let bm = surge.basePerMinute { line += " (\(Br.money(bm))/min)" }
-            lines.append(line)
+        if let e = econ, let be = e.breakEven {
+            var l = "Sem prejuízo \(Br.money(be))"
+            if let g = e.goalFare { l += " · Meta \(Br.money(g)) " + ((e.meetsGoal ?? false) ? "✓" : "✗") }
+            lines.append(l)
+        } else if let p = f.operatingProfit {
+            lines.append("Lucro \(Br.money(p))")
         }
 
-        var summary: [String] = []
-        if surge != nil, let c = a.offer.category { summary.append(c) }
-        if let p = f.operatingProfit { summary.append("Lucro \(Br.money(p))") }
-        if let km = f.totalDistanceKm {
-            var s = "Total \(Br.decimal(km, 1)) km"
-            if let real = a.realistic?.totalTimeMin { s += " em ~\(Br.minutes(real))" } else if let tm = f.totalTimeMin { s += " em \(Br.minutes(tm))" }
-            summary.append(s)
+        if let s = mv?.surge {
+            lines.append(s.real ? "⚡ +\(Br.money(s.amount)) dinâmico real"
+                         : "⚡ Dinâmico de fachada: sem ele \(Br.money(s.baseFare)) · justo \(Br.money(s.fairFare))")
         }
-        if !summary.isEmpty { lines.append(summary.joined(separator: " · ")) }
+        if let alert = mv?.alert, alert != "Dinâmico de fachada" { lines.append("⚠️ \(alert)") }
 
-        if let mv {
-            // O dinâmico de fachada já aparece no motivo; o alerta repetiria a mesma coisa.
-            if let alert = mv.alert, !(surge.map { !$0.real } ?? false && alert == "Dinâmico de fachada") {
-                lines.append("⚠️ \(alert)")
+        if let p = pace {
+            if p.reached {
+                lines.append("🎯 Meta do dia batida: \(Br.money(p.earned))")
+            } else {
+                var l = "Hoje \(Br.money(p.earned)) de \(Br.money(p.goal))"
+                if let n = p.neededPerHour {
+                    let h = Calendar.current.component(.hour, from: p.shiftEnd)
+                    l += " · precisa R$ \(Br.decimal(n, 0))/h até \(String(format: "%02dh", h))"
+                }
+                lines.append(l)
             }
-            if mv.zone.kind == .hot { lines.append("🔥 Zona quente\(mv.zone.name.map { ": \($0.capitalized)" } ?? "")") }
-        }
-        if d.classification != .gray, mv == nil, let t = a.fareTarget, let gap = t.gap, gap < 0 {
-            lines.append("Valor justo: \(Br.money(t.minimumFare))")
         }
         return Content(title: title, subtitle: sub.joined(separator: " · "), body: lines.joined(separator: "\n"))
     }
