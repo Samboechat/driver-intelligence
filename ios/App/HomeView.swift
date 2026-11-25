@@ -403,6 +403,7 @@ struct VerdictBlock: View {
                 Stat(title: "R$/h", value: Br.decimal(record.revenuePerHour, 0))
                 Stat(title: "Lucro", value: Br.money(record.profit))
             }
+            record.regionBox
             record.surgeBox
             if let reasons = record.reasons, !reasons.isEmpty {
                 ForEach(reasons.prefix(3), id: \.self) { r in

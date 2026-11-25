@@ -251,3 +251,44 @@ extension OfferRecord {
         }
     }
 }
+
+
+// MARK: - Previsão por região
+
+extension OfferRecord {
+    /// Saída → destino com o R$/h esperado em cada um, e o mínimo para a meta.
+    @ViewBuilder var regionBox: some View {
+        if destRegion != nil || originRegion != nil || goalFare != nil {
+            VStack(alignment: .leading, spacing: 6) {
+                if destRegion != nil || originRegion != nil {
+                    HStack(spacing: 8) {
+                        place(originRegion ?? "Saída", originPerHour, color: .secondary)
+                        Image(systemName: "arrow.right").font(.caption).foregroundStyle(.secondary)
+                        place(destRegion ?? "Destino", destPerHour,
+                              color: destPeriphery == true ? Palette.warning : levelColor(destLevel ?? 0))
+                    }
+                    if destPeriphery == true {
+                        Text("Destino de periferia: a volta tende a ser vazia.").font(.caption).foregroundStyle(Palette.warning)
+                    }
+                }
+                HStack(spacing: 14) {
+                    if let g = goalFare {
+                        Stat(title: "Mínimo p/ meta", value: Br.money(g), color: (fare ?? 0) >= g ? Palette.positive : Palette.negative)
+                    }
+                    if let b = breakEven { Stat(title: "Sem prejuízo", value: Br.money(b)) }
+                }
+            }
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(RoundedRectangle(cornerRadius: 12).fill(Color.white.opacity(0.05)))
+        }
+    }
+
+    private func place(_ name: String, _ perHour: Double?, color: Color) -> some View {
+        VStack(alignment: .leading, spacing: 1) {
+            Text(name).font(.caption.weight(.semibold)).lineLimit(1)
+            Text(perHour.map { "~R$ \(Br.decimal($0, 0))/h" } ?? "sem previsão")
+                .font(.subheadline.weight(.bold).monospacedDigit()).foregroundStyle(color)
+        }
+    }
+}

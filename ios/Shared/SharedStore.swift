@@ -201,6 +201,16 @@ struct OfferRecord: Codable, Identifiable, Equatable {
     var surgeBasePerMinute: Double?
     var surgeFair: Double?
     var surgeReal: Bool?
+    /// Previsão da região de saída (embarque) e de destino: nome, movimento e R$/h esperado.
+    var originRegion: String?
+    var originPerHour: Double?
+    var destRegion: String?
+    var destLevel: Int?
+    var destPerHour: Double?
+    var destPeriphery: Bool?
+    /// Valor mínimo para manter a meta e preço base (sem prejuízo).
+    var goalFare: Double?
+    var breakEven: Double?
 
     var cls: Classification { Classification(rawValue: classification) ?? .gray }
     var result: OfferOutcome? { outcome.flatMap(OfferOutcome.init(rawValue:)) }
@@ -235,6 +245,17 @@ struct OfferRecord: Codable, Identifiable, Equatable {
         }
         tripKm = a.offer.tripDistanceKm
         perMinute = a.matrix?.perMinute
+        let s = SharedStore.settings
+        let (o, d) = RegionNow.outlooks(a, settings: s)
+        originRegion = o?.name
+        originPerHour = o?.perHour
+        destRegion = d?.name
+        destLevel = d?.level
+        destPerHour = d?.perHour
+        destPeriphery = d?.periphery
+        let econ = PaceNow.economics(a, settings: s, pace: PaceNow.status(s))
+        goalFare = econ.goalFare
+        breakEven = econ.breakEven
         if let s = a.matrix?.surge {
             surge = s.amount
             surgeBase = s.baseFare
@@ -546,5 +567,18 @@ enum PaceNow {
     /// Lucro, preço base e valor da meta de um chamado.
     static func economics(_ a: OfferAnalysis, settings: DriverSettings, pace: PaceStatus) -> OfferEconomics {
         OfferEconomics.of(a, costPerKm: settings.matrix.costPerKm, neededPerHour: pace.neededPerHour, hourFloor: settings.matrix.hourFloor)
+    }
+}
+
+
+enum RegionNow {
+    /// Previsão da saída (na hora do embarque) e do destino (na hora da chegada).
+    static func outlooks(_ a: OfferAnalysis, settings: DriverSettings, now: Date = Date()) -> (RegionOutlook?, RegionOutlook?) {
+        let m = settings.matrix
+        let pickup = (a.offer.pickupTimeMin ?? 5) * 60
+        let total = (a.realistic?.totalTimeMin ?? a.financial.totalTimeMin).map { $0 * 60 } ?? pickup + 15 * 60
+        let o = DemandGuide.outlook(a.offer.origin, at: now.addingTimeInterval(pickup), hourFloor: m.hourFloor, hourIdeal: m.hourIdeal)
+        let d = DemandGuide.outlook(a.offer.destination, at: now.addingTimeInterval(total), hourFloor: m.hourFloor, hourIdeal: m.hourIdeal)
+        return (o, d)
     }
 }

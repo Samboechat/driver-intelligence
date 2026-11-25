@@ -211,17 +211,17 @@ public enum NotificationFormatter {
     }
 
     /**
-     * Notificação enxuta, para ler num relance:
-     *   título     🟢 ACEITAR · Lucro R$ 14,20
-     *   subtítulo  R$ 22,00 · 2,30/km · 1,05/min · R$ 63/h
-     *   corpo      (motivo, só se não for ACEITAR)
-     *              Sem prejuízo R$ 4,80 · Meta R$ 18,40 ✓
-     *              (dinâmico / volta vazia, se houver)
-     *              Hoje R$ 182 de R$ 470 · precisa R$ 49/h até 03h
-     * `econ` e `pace` vêm do app (custo por km, meta do dia); sem eles, mostra só o que a análise tem.
+     * Notificação para ler num relance:
+     *   título     🟢 ACEITAR · Lucro R$ 20,00
+     *   subtítulo  R$ 63/h · 2,30/km · mín. meta R$ 25 ✓
+     *   corpo      ✖︎ motivo (só RECUSAR/AVALIAR)
+     *              📍 Campolim · Alta · ~R$ 62/h   (para onde a corrida leva)
+     *              ⚡ dinâmico (só se houver)
+     *              🎯 Falta R$ 300 · R$ 60/h até 03h
      */
     public static func format(_ a: OfferAnalysis, goals: Goals, hourFloor: Double? = nil,
-                              econ: OfferEconomics? = nil, pace: PaceStatus? = nil) -> Content {
+                              econ: OfferEconomics? = nil, pace: PaceStatus? = nil,
+                              origin: RegionOutlook? = nil, destination: RegionOutlook? = nil) -> Content {
         let f = a.financial
         let b = a.basis
         let d = a.decision
@@ -233,11 +233,14 @@ public enum NotificationFormatter {
             ?? "\(d.classification.dot) \(verdict) · \(Br.money(f.grossRevenue))"
 
         var sub: [String] = []
-        if profit != nil, let fare = f.grossRevenue { sub.append(Br.money(fare)) }
-        if let rk = f.revenuePerKm { sub.append("\(Br.decimal(rk))/km") }
-        if let pm = mv?.perMinute { sub.append("\(Br.decimal(pm))/min") }
         if let rh = b.revenuePerHour { sub.append("R$ \(Br.decimal(rh, 0))/h") }
-        if sub.count < 4, let c = a.offer.category { sub.append(c) }
+        if let rk = f.revenuePerKm { sub.append("\(Br.decimal(rk))/km") }
+        if let g = econ?.goalFare {
+            sub.append("mín. meta \(Br.money(g)) " + ((econ?.meetsGoal ?? false) ? "✓" : "✗"))
+        } else if let be = econ?.breakEven {
+            sub.append("sem prejuízo \(Br.money(be))")
+        }
+        if sub.isEmpty, let fare = f.grossRevenue { sub.append(Br.money(fare)) }
 
         var lines: [String] = []
         if let mv {
@@ -250,28 +253,27 @@ public enum NotificationFormatter {
             lines.append(d.headline)
         }
 
-        if let e = econ, let be = e.breakEven {
-            var l = "Sem prejuízo \(Br.money(be))"
-            if let g = e.goalFare { l += " · Meta \(Br.money(g)) " + ((e.meetsGoal ?? false) ? "✓" : "✗") }
+        if let dest = destination {
+            var l = "📍 " + dest.short
+            if let o = origin, o.name != dest.name { l += " (saída \(Br.decimal(o.perHour, 0))/h)" }
             lines.append(l)
-        } else if let p = f.operatingProfit {
-            lines.append("Lucro \(Br.money(p))")
+        } else if let alert = mv?.alert, alert != "Dinâmico de fachada" {
+            lines.append("⚠️ \(alert)")
         }
 
         if let s = mv?.surge {
             lines.append(s.real ? "⚡ +\(Br.money(s.amount)) dinâmico real"
-                         : "⚡ Dinâmico de fachada: sem ele \(Br.money(s.baseFare)) · justo \(Br.money(s.fairFare))")
+                         : "⚡ Dinâmico de fachada · justo \(Br.money(s.fairFare))")
         }
-        if let alert = mv?.alert, alert != "Dinâmico de fachada" { lines.append("⚠️ \(alert)") }
 
         if let p = pace {
             if p.reached {
-                lines.append("🎯 Meta do dia batida: \(Br.money(p.earned))")
+                lines.append("🎯 Meta do dia batida")
             } else {
-                var l = "Hoje \(Br.money(p.earned)) de \(Br.money(p.goal))"
+                var l = "🎯 Falta \(Br.money(p.remaining))"
                 if let n = p.neededPerHour {
                     let h = Calendar.current.component(.hour, from: p.shiftEnd)
-                    l += " · precisa R$ \(Br.decimal(n, 0))/h até \(String(format: "%02dh", h))"
+                    l += " · R$ \(Br.decimal(n, 0))/h até \(String(format: "%02dh", h))"
                 }
                 lines.append(l)
             }

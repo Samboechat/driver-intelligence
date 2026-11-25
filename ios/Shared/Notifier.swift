@@ -36,7 +36,9 @@ enum Notifier {
     static func post(_ a: OfferAnalysis, settings: DriverSettings, identifier: String, screenshot: URL? = nil, record: OfferRecord? = nil) {
         let pace = PaceNow.status(settings)
         let c = NotificationFormatter.format(a, goals: settings.goals, hourFloor: settings.hourFloor,
-                                             econ: PaceNow.economics(a, settings: settings, pace: pace), pace: pace)
+                                             econ: PaceNow.economics(a, settings: settings, pace: pace), pace: pace,
+                                             origin: RegionNow.outlooks(a, settings: settings).0,
+                                             destination: RegionNow.outlooks(a, settings: settings).1)
         let content = UNMutableNotificationContent()
         content.title = c.title
         content.subtitle = c.subtitle

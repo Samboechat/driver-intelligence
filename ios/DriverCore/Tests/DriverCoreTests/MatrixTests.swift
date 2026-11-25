@@ -224,14 +224,14 @@ final class AcceptanceMatrixTests: XCTestCase {
         let a = OfferAnalyzer().analyze(offer: offer(perKm: 2.20, category: "UberX", destination: "Éden"), context: ctx)
         let n = NotificationFormatter.format(a, goals: Goals())
         XCTAssertEqual(n.title, "🟢 ACEITAR · Lucro R$ 17,00")
-        XCTAssertEqual(n.subtitle, "R$ 22,00 · 2,20/km · 1,00/min · R$ 60/h")
+        XCTAssertEqual(n.subtitle, "R$ 60/h · 2,20/km")
         XCTAssertTrue(n.body.contains("⚠️ Volta Vazia - Ligar Direcionamento"), n.body)
 
         // Recusa: só o motivo principal, para a notificação ficar curta.
         let r = OfferAnalyzer().analyze(offer: offer(perKm: 1.5, pickup: 6, trip: 4, rating: 4.7), context: ctx)
         let rn = NotificationFormatter.format(r, goals: Goals())
         XCTAssertEqual(rn.title, "🔴 RECUSAR · Lucro R$ 10,00")
-        XCTAssertTrue(rn.body.hasPrefix("✖︎ Km baixo: 1,50 · mínimo 2,00\n"), rn.body)
+        XCTAssertEqual(rn.body, "✖︎ Km baixo: 1,50 · mínimo 2,00")
         XCTAssertFalse(rn.body.contains("Busca longa"))
 
         let y = OfferAnalyzer().analyze(offer: offer(perKm: 2.10), context: ctx)
@@ -252,8 +252,8 @@ final class AcceptanceMatrixTests: XCTestCase {
         XCTAssertEqual(e.meetsGoal, true)
         let n = NotificationFormatter.format(a, goals: Goals(), econ: e, pace: pace)
         XCTAssertEqual(n.title, "🟢 ACEITAR · Lucro R$ 20,00")
-        XCTAssertTrue(n.body.contains("Sem prejuízo R$ 5,00 · Meta R$ 25,00 ✓"), n.body)
-        XCTAssertTrue(n.body.contains("Hoje R$ 170,00 de R$ 470,00 · precisa R$ 60/h até"), n.body)
+        XCTAssertEqual(n.subtitle, "R$ 60/h · 2,50/km · mín. meta R$ 25,00 ✓")
+        XCTAssertTrue(n.body.hasPrefix("🎯 Falta R$ 300,00 · R$ 60/h até"), n.body)
         XCTAssertLessThanOrEqual(n.body.split(separator: "\n").count, 3)
 
         // Meta já batida: o valor da meta usa o piso por hora.

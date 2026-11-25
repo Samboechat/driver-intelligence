@@ -57,8 +57,9 @@ public struct HubSample: Sendable {
     public var lon: Double
     public var perKm: Double?
     public var green: Bool
-    public init(date: Date, lat: Double, lon: Double, perKm: Double?, green: Bool) {
-        self.date = date; self.lat = lat; self.lon = lon; self.perKm = perKm; self.green = green
+    public var perHour: Double?
+    public init(date: Date, lat: Double, lon: Double, perKm: Double?, green: Bool, perHour: Double? = nil) {
+        self.date = date; self.lat = lat; self.lon = lon; self.perKm = perKm; self.green = green; self.perHour = perHour
     }
 }
 
@@ -369,5 +370,69 @@ public enum DemandGuide {
                              tripCost: dist.map { $0 * costPerKm }, score: score, verdict: verdict, nextPeak: next)
         }
         .sorted { $0.score > $1.score }
+    }
+}
+
+// MARK: - Previsão por região (saída e destino de um chamado)
+
+/// O que esperar de uma região num horário: movimento e R$/h previsto para quem fica rodando ali.
+public struct RegionOutlook: Equatable, Sendable {
+    public var name: String
+    public var level: Int
+    public var perHour: Double
+    public var periphery: Bool
+    public var at: Date
+    public var why: String?
+
+    /// "Campolim · Alta · ~R$ 62/h".
+    public var short: String {
+        periphery ? "\(name) · volta vazia · ~R$ \(Br.decimal(perHour, 0))/h"
+            : "\(name) · \(DemandGuide.levelLabel(level)) · ~R$ \(Br.decimal(perHour, 0))/h"
+    }
+}
+
+extension DemandGuide {
+    /// Região de um endereço (o nome de bairro, shopping ou avenida mais específico que aparecer).
+    public static func hub(matching text: String?, hubs: [DemandHub] = hubs) -> DemandHub? {
+        guard let text, !text.isEmpty else { return nil }
+        let t = " " + SorocabaZone.normalize(text) + " "
+        var best: (DemandHub, Int)?
+        for h in hubs {
+            for k in [h.name] + h.places {
+                let n = SorocabaZone.normalize(k)
+                guard n.count >= 5, t.contains(" " + n + " ") else { continue }
+                if n.count > (best?.1 ?? 0) { best = (h, n.count) }
+            }
+        }
+        return best?.0
+    }
+
+    /**
+     * R$/h previsto numa região: pelo movimento do horário (alta ≈ 20% acima do ideal, boa = ideal,
+     * fraca = piso, parada ≈ 15% abaixo do piso), descontando a volta vazia da periferia.
+     * Quando há histórico próprio na região e horário, usa a média do que você recebeu ali.
+     */
+    public static func outlook(_ text: String?, at date: Date, hourFloor: Double, hourIdeal: Double,
+                               samples: [HubSample] = [], hubs: [DemandHub] = hubs,
+                               calendar: Calendar = .current) -> RegionOutlook? {
+        guard let h = hub(matching: text, hubs: hubs) else { return nil }
+        let (lvl, w) = level(h, at: date, calendar: calendar)
+        var perHour: Double
+        switch lvl {
+        case 3: perHour = hourIdeal * 1.2
+        case 2: perHour = hourIdeal
+        case 1: perHour = hourFloor
+        default: perHour = hourFloor * 0.85
+        }
+        if h.periphery { perHour *= 0.9 }
+        let mine = samples.filter { s in
+            guard let ph = s.perHour, ph > 0 else { return false }
+            let sc = calendar.dateComponents([.weekday, .hour], from: s.date)
+            let c = calendar.dateComponents([.weekday, .hour], from: date)
+            return sc.weekday == c.weekday && abs((sc.hour ?? 0) - (c.hour ?? 0)) <= 1
+                && GeoPoint(lat: s.lat, lon: s.lon, accuracy: 0, time: 0).distance(to: h.point) <= h.radiusKm * 1000
+        }.compactMap(\.perHour)
+        if mine.count >= 4 { perHour = 0.4 * perHour + 0.6 * mine.reduce(0, +) / Double(mine.count) }
+        return RegionOutlook(name: h.name, level: lvl, perHour: perHour, periphery: h.periphery, at: date, why: w?.why)
     }
 }

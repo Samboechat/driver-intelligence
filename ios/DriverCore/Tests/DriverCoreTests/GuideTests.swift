@@ -77,4 +77,18 @@ final class DemandGuideTests: XCTestCase {
         XCTAssertEqual(own?.count, 6)
         XCTAssertGreaterThan(own!.level, 2)
     }
+
+    func testPrevisaoDoDestino() {
+        XCTAssertEqual(DemandGuide.hub(matching: "Av. Antônio Carlos Comitre, 500 - Parque Campolim")?.id, "campolim")
+        XCTAssertEqual(DemandGuide.hub(matching: "Shopping Iguatemi Esplanada, Votorantim")?.id, "iguatemi")
+        XCTAssertNil(DemandGuide.hub(matching: "Rua Qualquer, 10"))
+        // Sábado 22h10 no Iguatemi: alta → 20% acima do ideal.
+        let o = DemandGuide.outlook("Iguatemi Esplanada", at: d(21, 22, 10), hourFloor: 42, hourIdeal: 54, calendar: cal)!
+        XCTAssertEqual(o.level, 3)
+        XCTAssertEqual(o.perHour, 64.8, accuracy: 1e-9)
+        XCTAssertEqual(o.short, "Iguatemi Esplanada · Alta · ~R$ 65/h")
+        let zn = DemandGuide.outlook("Vitória Régia, Sorocaba", at: d(23, 15), hourFloor: 42, hourIdeal: 54, calendar: cal)!
+        XCTAssertTrue(zn.periphery)
+        XCTAssertTrue(zn.short.contains("volta vazia"))
+    }
 }

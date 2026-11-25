@@ -264,8 +264,8 @@ final class NotificationTests: XCTestCase {
         let a = OfferAnalyzer().analyze(frame: .fromText("UberX\nR$ 19,20\n4 min (1,2 km) de distância\nViagem: 20 min (7,7 km)"), context: ctx)!
         let c = NotificationFormatter.format(a, goals: ctx.goals)
         XCTAssertEqual(c.title, "🟢 RENTÁVEL · Lucro R$ 14,18")
-        XCTAssertEqual(c.subtitle, "R$ 19,20 · 2,16/km · R$ 48/h · UberX")
-        XCTAssertEqual(c.body, "Lucro R$ 14,18")
+        XCTAssertEqual(c.subtitle, "R$ 48/h · 2,16/km")
+        XCTAssertEqual(c.body, "")
     }
 
     func testTempoRealistaNaNotificacao() {
